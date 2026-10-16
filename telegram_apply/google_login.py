@@ -40,7 +40,8 @@ def signed_in(profile: str) -> bool:
         d.quit()
 
 
-chrome = next((p for p in CANDIDATES if os.path.exists(p)), None) or shutil.which("chrome")
+chrome = (next((p for p in CANDIDATES if os.path.exists(p)), None) or shutil.which("google-chrome-stable")
+          or shutil.which("google-chrome") or shutil.which("chrome"))
 if not chrome:
     raise SystemExit("Could not find chrome.exe")
 profile = os.path.abspath(cfg.chrome_user_data_dir)

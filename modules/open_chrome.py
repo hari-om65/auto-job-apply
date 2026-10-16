@@ -77,6 +77,9 @@ def createChromeSession(isRetry: bool = False):
     # "--headless" is the legacy mode and is trivially detectable, "=new" runs the real browser.
     if run_in_background:   options.add_argument("--headless=new")
     if disable_extensions:  options.add_argument("--disable-extensions")
+    if os.environ.get("JA_SERVER"):  # Linux server: no sandbox helper, small /dev/shm
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
 
     print_lg("IF YOU HAVE MORE THAN 10 TABS OPENED, PLEASE CLOSE OR BOOKMARK THEM! Or it's highly likely that application will just open browser and not do anything!")
     profile_dir = find_default_profile_directory()

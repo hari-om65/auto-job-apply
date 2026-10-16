@@ -62,6 +62,9 @@ def _driver():
     if cfg.chrome_user_data_dir:
         opts.add_argument(f"--user-data-dir={os.path.abspath(cfg.chrome_user_data_dir)}")
     opts.add_argument("--disable-blink-features=AutomationControlled")
+    if os.environ.get("JA_SERVER"):  # Linux server: no sandbox helper, small /dev/shm
+        opts.add_argument("--no-sandbox")
+        opts.add_argument("--disable-dev-shm-usage")
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
     return webdriver.Chrome(options=opts)
 
