@@ -20,7 +20,19 @@ Dry run is ON by default: everything is prepared but nothing is sent or submitte
 `telegram_apply/output/` and the screenshots in `telegram_apply/output/proof/` before turning it off.
 
 ## Notes
-- The resume only uses facts from your real resume and `candidate_facts`; skills you do not have are never added.
+- Experience, projects, summary and certifications only use facts from your real resume and `candidate_facts`.
+  Skills you do not have are added only to the Skills line, and only when `add_missing_keywords` is on.
 - Only jobs open to your graduation batch (`required_batch`) are applied to.
 - CAPTCHAs and login walls on company sites are not bypassed; those jobs are marked "manual" in the results.
 - Use responsibly and within each site's terms; you are responsible for what is submitted in your name.
+
+## Resume uploads and Drive links
+- When a form has a file-upload question for your resume/CV, that job's tailored PDF is attached.
+- When a form asks for a Google Drive link to your resume, the tailored PDF is uploaded to your Drive, shared as
+  "Anyone with the link" (viewer) and that link is used. It is always the resume made for that job; if the link cannot
+  be created the job is marked "blocked" instead of using another resume.
+- The Drive upload types the file path into Windows' file-open dialog (Windows only, uses `pyautogui`): do not use the
+  mouse/keyboard for the few seconds while a Chrome window is uploading.
+- Application emails are 120-150 words about you, then your name, email, phone, LinkedIn and GitHub, with the PDF attached.
+- Optional setting `add_missing_keywords` adds job keywords you do not have to the Skills section only (never to
+  experience); the results table lists them so you know what to learn before interviews.

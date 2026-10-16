@@ -40,24 +40,48 @@ def base_links() -> dict:
     return found
 
 
+BOOST_RULE = (" ADDITIONAL RULE (the candidate opted in and will learn these before interviews): add EVERY job keyword "
+              "you could not support from the resume to the skills list as plain skill names. Skills section ONLY - never "
+              "mention them in experience bullets, projects, summary or certifications, and never invent employers, "
+              "metrics or dates. Return them in 'added_keywords'.")
+
+
+def resume_ok(r: dict) -> bool:
+    """A usable resume has a summary, skills, at least one job and real content - never a blank page with a header."""
+    return (bool(r.get("summary")) and len(r.get("skills") or []) >= 5 and len(r.get("experience") or []) >= 1
+            and len(resume_to_text(r)) > 800)
+
+
 def tailor(resume_text: str, job: dict, feedback: str = "") -> dict:
+    """Tailored resume, validated: an empty/partial model answer is retried (new prompt = not served from the cache)."""
+    for attempt in range(3):
+        note = "" if attempt == 0 else (" Your previous answer was empty or incomplete. Return ALL sections with full "
+                                         f"content (summary, skills, experience, projects, education). Attempt {attempt + 1}.")
+        r = _tailor_once(resume_text, job, feedback + note, temperature=0.3 + 0.2 * attempt)
+        if resume_ok(r):
+            return r
+    raise RuntimeError("the AI could not produce a complete resume for this job")
+
+
+def _tailor_once(resume_text: str, job: dict, feedback: str = "", temperature: float = 0.3) -> dict:
     """Rewrite the resume for the job. Never invents experience: keywords are only used if the resume supports them."""
     return llm.chat_json(
-        "You are a professional resume writer producing ATS-friendly resumes. Rewrite the candidate's resume for the "
+        ("You are a professional resume writer producing ATS-friendly resumes. Rewrite the candidate's resume for the "
         "target job. RULES: (1) Use ONLY facts present in the original resume - never invent employers, degrees, "
         "metrics, tools or dates. (2) Work the job's keywords in naturally (summary, skills, bullets) wherever the "
         "candidate's real experience supports them; list any job keywords you could NOT support in "
         "'unsupported_keywords'. (3) Strong action-verb bullets, quantified only if the original has numbers. "
-        "(3b) Treat candidate_facts as true: put the current location in contact.location and reflect the total experience accurately. (4) One page, simple structure, standard section names. (5) Skills: pick only the skills relevant to this job "
+        "(3b) Treat candidate_facts as true (including extra_skills: skills the candidate really has - use them freely as keywords): put the current location in contact.location and reflect the total experience accurately. (4) One page, simple structure, standard section names. (5) Skills: pick only the skills relevant to this job "
         "(max ~25, most relevant FIRST, plain tool names), drop irrelevant ones; reorder experience/project bullets so the "
         "most job-relevant come first and trim the rest. (6) Contact links: only include real http(s) URLs. Reply JSON: name, contact {email, phone, location, "
         "links[]}, summary, skills (list of strings), experience [{title, company, dates, bullets[]}], projects "
         "[{name, bullets[]}], education [{degree, institution, dates, details}], certifications [strings], "
-        "unsupported_keywords [strings].",
+        "unsupported_keywords [strings], added_keywords [strings]."
+         + (BOOST_RULE if cfg.add_missing_keywords else "")),
         json.dumps({"original_resume": resume_text[:9000],
                     "job": {k: job.get(k) for k in ("company", "role", "skills", "responsibilities", "summary")},
                     "candidate_facts": cfg.candidate_facts, "fix_these": feedback}),
-        temperature=0.3,
+        temperature=temperature,
     )
 
 
@@ -72,6 +96,22 @@ def pdf_safe(text) -> str:
     t = "".join(_ASCII.get(c, c) for c in str(text or ""))
     t = "".join(" " if c.isspace() else c for c in t)  # any odd space character (nbsp, thin space...) -> plain space
     return t.encode("cp1252", "ignore").decode("cp1252")
+
+
+def signature_block(r: dict) -> str:
+    """Name, email, phone, LinkedIn and GitHub - the end of every application email."""
+    c, links = r.get("contact", {}), base_links()
+    lines = [str(r.get("name") or ""), f"Email: {c.get('email') or cfg.smtp_user}", f"Phone: {c.get('phone') or ''}"]
+    for k in ("LinkedIn", "GitHub"):
+        if links.get(k):
+            lines.append(f"{k}: {links[k]}")
+    return "\n".join(l for l in lines if l.strip())
+
+
+def email_profile(base_text: str) -> str:
+    """Facts for application emails: the ORIGINAL resume (not the keyword-boosted one) plus your fixed facts."""
+    facts = "".join(f"{k.replace('_', ' ')}: {v}\n" for k, v in cfg.candidate_facts.items() if v)
+    return f"{base_text}\nFACTS:\n{facts}"
 
 
 def profile_text(r: dict) -> str:
@@ -104,6 +144,12 @@ def ats_score(resume: dict, job: dict) -> tuple[int, list[str]]:
     text = resume_to_text(resume)
     missing = [k for k in keywords if k.lower() not in text]
     return round(100 * (len(keywords) - len(missing)) / len(keywords)), missing
+
+
+def keywords_added(job: dict, base_text: str, tailored: dict) -> list[str]:
+    """Job keywords that are NOT in your original resume but are now in the tailored one (your 'to learn' list)."""
+    base, new = base_text.lower(), resume_to_text(tailored)
+    return [k for k in (job.get("skills") or []) if k and k.lower() not in base and k.lower() in new]
 
 
 def build_tailored_resume(job: dict, base_text: str, rounds: int = 2) -> tuple[dict, int, list[str]]:

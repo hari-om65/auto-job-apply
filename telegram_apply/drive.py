@@ -46,54 +46,81 @@ def _click_xpath(d, xpath: str, timeout: float = 8) -> bool:
     return False
 
 
+def _drive_file_id(d, stem: str, timeout: int = 40) -> str | None:
+    """Find the uploaded file's id through Drive search (the main list is lazy-loaded and sorted by name)."""
+    from urllib.parse import quote
+    d.get(f"https://drive.google.com/drive/search?q={quote(stem)}")
+    end = time.time() + timeout
+    while time.time() < end:
+        for r in d.find_elements(By.CSS_SELECTOR, "[data-id]"):
+            if stem in (r.text or "") and r.get_attribute("data-id"):
+                return r.get_attribute("data-id")
+        time.sleep(1.5)
+    return None
+
+
 def upload_to_drive(d, pdf_path: str) -> str | None:
-    """Upload the PDF to Drive in a new tab, set 'Anyone with the link', return the link. None on failure."""
+    """Upload exactly this job's PDF to Drive in a new tab, share it as 'Anyone with the link' (viewer), and return
+    the link. Returns None if any step fails - the caller must NOT substitute another resume silently."""
+    import pyautogui  # Drive's "File upload" opens a native Windows dialog; we type the path into it
+
     pdf_abs = os.path.abspath(pdf_path)
-    name = os.path.basename(pdf_abs)
-    stem = os.path.splitext(name)[0]
+    stem = os.path.splitext(os.path.basename(pdf_abs))[0]
     main = d.current_window_handle
     d.switch_to.new_window("tab")
     try:
+        d.maximize_window()
         d.get("https://drive.google.com/drive/my-drive")
         time.sleep(4)
         if "accounts.google.com" in d.current_url:
             return None
-        inputs = d.find_elements(By.CSS_SELECTOR, "input[type='file']")
-        if not inputs:  # the hidden upload input appears once the New menu is opened
-            _click_xpath(d, "//button[@aria-label='New' or .//span[normalize-space()='New']] | //*[@role='button'][normalize-space()='New']", 5)
-            time.sleep(1)
-            inputs = d.find_elements(By.CSS_SELECTOR, "input[type='file']")
-        if not inputs:
+        if not _click_xpath(d, "//button[@aria-label='New' or normalize-space()='New']", 8):
             return None
-        inputs[0].send_keys(pdf_abs)
-
-        row_xpath = f"//*[@data-id and .//*[contains(normalize-space(text()), '{stem}')]]"
-        file_id, end = None, time.time() + 60
-        while time.time() < end and not file_id:
-            rows = d.find_elements(By.XPATH, row_xpath)
-            file_id = next((r.get_attribute("data-id") for r in rows if r.get_attribute("data-id")), None)
+        time.sleep(1)
+        if not _click_xpath(d, "//*[@role='menuitem'][starts-with(normalize-space(.), 'File upload')]", 6):
+            return None
+        time.sleep(2.5)                          # the native "Open" dialog appears with the filename box focused
+        pyautogui.write(pdf_abs, interval=0.01)
+        pyautogui.press("enter")
+        end = time.time() + 60                   # wait for Drive's "upload complete" toast
+        while time.time() < end:
+            if "upload complete" in d.find_element(By.TAG_NAME, "body").text.lower():
+                break
             time.sleep(1)
+        else:
+            return None
+
+        file_id = _drive_file_id(d, stem)
         if not file_id:
             return None
 
-        # open the file's page and share it with "Anyone with the link"
+        # open the file and share it with "Anyone with the link" (viewer)
         d.get(f"https://drive.google.com/file/d/{file_id}/view")
         time.sleep(3)
         if not _click_xpath(d, "//*[@role='button' and (contains(@aria-label,'Share') or normalize-space()='Share')]", 10):
             return None
-        time.sleep(2)
-        for fr in d.find_elements(By.CSS_SELECTOR, "iframe[src*='share'], iframe[src*='sharing']"):
-            try:
-                d.switch_to.frame(fr)
-                break
-            except Exception:
-                pass
-        _click_xpath(d, "//*[normalize-space()='Restricted']/ancestor-or-self::*[@role='combobox' or @role='button'][1]", 6)
-        ok = _click_xpath(d, "//*[@role='option' or @role='menuitemradio' or @role='menuitem'][contains(., 'Anyone with the link')]", 6)
+        frame, end = None, time.time() + 15
+        while time.time() < end and frame is None:   # the dialog lives in a drivesharing iframe
+            frame = next((f for f in d.find_elements(By.TAG_NAME, "iframe")
+                          if "drivesharing/dialog/share" in (f.get_attribute("src") or "")), None)
+            time.sleep(0.5)
+        if frame is None:
+            return None
+        d.switch_to.frame(frame)
+        time.sleep(1.5)
+        if not _click_xpath(d, "//button[contains(@aria-label,'change general access')]", 10):
+            d.switch_to.default_content()
+            return None
         time.sleep(1)
-        _click_xpath(d, "//*[@role='button'][normalize-space()='Done'] | //button[normalize-space()='Done']", 4)
+        picked = d.execute_script(
+            "const e=[...document.querySelectorAll('[role=menuitemradio],[role=menuitem],[role=option]')]"
+            ".find(x=>(x.textContent||'').includes('Anyone with the link'));if(e){e.click();return true}return false")
+        time.sleep(1.5)
+        label = d.find_element(By.XPATH, "//button[contains(@aria-label,'general access')]").get_attribute("aria-label") or ""
+        shared = bool(picked) and "Anyone with the link" in label     # confirm the setting really changed
+        _click_xpath(d, "//button[normalize-space()='Done']", 4)
         d.switch_to.default_content()
-        return f"https://drive.google.com/file/d/{file_id}/view?usp=sharing" if ok else None
+        return f"https://drive.google.com/file/d/{file_id}/view?usp=sharing" if shared else None
     except Exception:
         return None
     finally:
@@ -104,17 +131,17 @@ def upload_to_drive(d, pdf_path: str) -> str | None:
 
 
 def get_resume_link(d, pdf_path: str, notes: list) -> str | None:
-    """Shareable link for this job's tailored resume; falls back to the Drive link inside your base resume."""
+    """Shareable 'anyone with the link' Drive link of THIS job's tailored resume (uploaded once, then cached).
+    Retries once. Returns None on failure - the base resume is never substituted."""
     if pdf_path in _cache:
         return _cache[pdf_path]
-    link = upload_to_drive(d, pdf_path) if pdf_path else None
-    if link:
-        _cache[pdf_path] = link
-        return link
-    fallback = base_drive_link()
-    notes.append("Drive upload failed - used the Drive link of your base resume" if fallback
-                 else "Drive upload failed and no fallback link")
-    return fallback
+    for _ in range(2):
+        link = upload_to_drive(d, pdf_path) if pdf_path else None
+        if link:
+            _cache[pdf_path] = link
+            return link
+    notes.append("could not create the Drive link for this job's resume")
+    return None
 
 
 def upload_in_google_form(d, item, pdf_path: str, notes: list, title: str) -> bool:

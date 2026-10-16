@@ -14,9 +14,10 @@ DEFAULTS = {
     "window_end": "09:00",     # ... until this time (if start > end the window starts the previous day)
     "dry_run": True,           # True = prepare everything, send nothing
     "channels": list(cfg.tg_channels),
+    "add_missing_keywords": cfg.add_missing_keywords,   # put missing job keywords in the Skills section
     "required_batch": cfg.required_batch,   # only apply to jobs open to this graduation year ("" = any)
     "min_match_score": cfg.min_match_score,
-    "min_ats_score": 40,       # don't apply when the tailored resume covers less than this % of job keywords
+    "min_ats_score": 0,          # don't apply when the tailored resume covers less than this % of job keywords
     "max_per_day": cfg.max_applications_per_day,
     "last_run_date": "",
 }
@@ -25,7 +26,7 @@ DEFAULTS = {
 def load() -> dict:
     s = dict(DEFAULTS)
     if os.path.exists(PATH):
-        with open(PATH, encoding="utf-8") as f:
+        with open(PATH, encoding="utf-8-sig") as f:  # tolerate a BOM
             s.update(json.load(f))
     return s
 
@@ -43,6 +44,7 @@ def apply_to_config(s: dict | None = None) -> dict:
     cfg.dry_run = bool(s["dry_run"])
     cfg.tg_channels = list(s["channels"])
     cfg.required_batch = str(s["required_batch"]).strip()
+    cfg.add_missing_keywords = bool(s["add_missing_keywords"])
     cfg.min_match_score = int(s["min_match_score"])
     cfg.max_applications_per_day = int(s["max_per_day"])
     return s

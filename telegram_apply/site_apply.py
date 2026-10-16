@@ -144,8 +144,9 @@ def apply_to_site(url: str, job: dict, profile_text: str, pdf_path: str, submit:
             questions = [f for f in _group_fields(fields) if f["type"] != "file"]
             if drive.asks_for_resume_link([f["label"] for f in questions]):  # a field wants a Drive link to the resume
                 link = drive.get_resume_link(d, pdf_path, notes)
-                if link:
-                    profile_text += f"\nResume link (Google Drive, anyone with the link can view): {link}\n"
+                if not link:  # never submit with a wrong/missing resume link
+                    return "blocked: could not create a Drive link for this job's resume - apply manually"
+                profile_text += f"\nResume link (Google Drive, anyone with the link can view): {link}\n"
             _answer_and_fill(d, job, profile_text, questions, notes)
 
             # second pass: anything required that is still empty gets a firmer prompt

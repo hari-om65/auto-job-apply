@@ -12,12 +12,27 @@ FILL_RULES = 'Fill EVERY question - never leave one blank. First use the FACTS (
 from config import telegram_apply as cfg
 
 
-def write_email_body(job: dict, resume_text: str) -> dict:
-    return llm.chat_json(
-        "Write a short, professional job-application email (under 120 words) from the candidate to a recruiter. "
-        "Only use facts from the resume. Reply JSON: subject, body (plain text, sign off with the candidate's name).",
-        json.dumps({"job": {k: job.get(k) for k in ("company", "role")}, "resume": resume_text[:5000]}),
-    )
+def compose_email(job: dict, resume_text: str, signature: str) -> dict:
+    """Subject + body: a 120-150 word introduction of the candidate, then the contact block, resume attached."""
+    feedback = ""
+    for _ in range(3):
+        mail = llm.chat_json(
+            "You write job-application emails from a candidate to a recruiter. Write the MAIN TEXT only, between 120 and "
+            "150 words (count them): a greeting 'Dear Hiring Team,', then in first person describe who the candidate is - "
+            "education, 1 year of AI/software engineering experience, key skills, standout projects and impact - and why "
+            "they fit this role at this company, ending with a line that the resume is attached. Use ONLY facts from the "
+            "profile; no signature (it is added separately). The candidate is a currently enrolled B.Tech student graduating "
+            "in 2027 - never call them a graduate. Only mention skills and work that appear in the profile. "
+            "Reply JSON: subject, body (plain text)." + feedback,
+            json.dumps({"job": {k: job.get(k) for k in ("company", "role", "skills")}, "profile": resume_text[:5000]}),
+            temperature=0.4,
+        )
+        words = len(str(mail.get("body", "")).split())
+        if 120 <= words <= 150:
+            break
+        feedback = f" Your last body had {words} words. It MUST be 120-150 words."
+    mail["body"] = f"{mail['body'].strip()}\n\nRegards,\n{signature}\nResume: attached (PDF)"
+    return mail
 
 
 def send_email(to: str, subject: str, body: str, pdf_path: str) -> None:
@@ -91,6 +106,44 @@ def _ensure_google_signin(d, wait_s: int = 240) -> bool:
     return False
 
 
+_ERRORS_JS = """const out=[];document.querySelectorAll('[role=alert]').forEach(a=>{
+  const m=(a.textContent||'').trim(); if(!a.offsetParent||!m) return;
+  let e=a; while(e&&!e.querySelector('[role=heading]')) e=e.parentElement;
+  out.push([e?e.querySelector('[role=heading]').textContent.trim():'?', m]);}); return out;"""
+
+
+def _form_errors(d) -> list:
+    """Visible validation messages on the current form page as [(question, message), ...]."""
+    return [tuple(x) for x in d.execute_script(_ERRORS_JS)]
+
+
+def _fix_validation(d, job: dict, resume_text: str, errors: list) -> bool:
+    """Rewrite answers that broke a rule such as 'Must be at least 700 characters'. True if something was changed."""
+    from selenium.webdriver.common.by import By
+    changed = False
+    for title, msg in errors:
+        if "required question" in msg.lower():
+            continue
+        try:
+            item = d.find_element(By.XPATH, f"//div[@role='listitem'][.//div[@role='heading'][contains(., {json.dumps(title[:30])})]]")
+            box = item.find_element(By.CSS_SELECTOR, "textarea, input[type='text']")
+        except Exception:
+            continue
+        better = llm.chat_json(
+            "Rewrite a job-application form answer so it satisfies the form's validation rule. Keep it truthful, use only "
+            "facts in the profile, and aim 15% beyond any minimum (for 'at least N characters' write at least N+100 "
+            "characters). Reply JSON {\"answer\": string}.",
+            json.dumps({"question": title, "rule": msg, "previous_answer": box.get_attribute("value"),
+                        "job": {k: job.get(k) for k in ("company", "role")}, "profile": resume_text[:5000]}),
+            temperature=0.3,
+        ).get("answer")
+        if better:
+            box.clear()
+            box.send_keys(str(better))
+            changed = True
+    return changed
+
+
 def _dropdown_options(d, item) -> list[str]:
     """Open a Google Forms dropdown, read its options, close it again."""
     from selenium.webdriver.common.by import By
@@ -121,6 +174,10 @@ def fill_google_form(url: str, job: dict, resume_text: str, submit: bool, pdf_pa
             return "blocked: form needs Google sign-in - sign in once when the Chrome window asks (login is then saved)"
         time.sleep(1)
         for _page in range(10):
+            d.execute_script(  # "Record <your email> as the email to be included with my response" (form header)
+                "document.querySelectorAll('[role=checkbox]').forEach(c=>{const t=((c.getAttribute('aria-label')||'')+' '+"
+                "(c.parentElement?c.parentElement.textContent:'')).toLowerCase();"
+                "if(t.includes('email')&&t.includes('response')&&c.getAttribute('aria-checked')!=='true')c.click()})")
             items = d.find_elements(By.CSS_SELECTOR, "div[role='listitem']")
             questions = []
             for i, it in enumerate(items):
@@ -129,6 +186,11 @@ def fill_google_form(url: str, job: dict, resume_text: str, submit: bool, pdf_pa
                 except Exception:
                     continue
                 kind, options = None, []
+                if title.lower().startswith("email") and it.find_elements(By.CSS_SELECTOR, "div[role='checkbox']"):
+                    cb = it.find_element(By.CSS_SELECTOR, "div[role='checkbox']")  # "record my email with my response"
+                    if cb.get_attribute("aria-checked") != "true":
+                        cb.click()
+                    continue
                 if it.find_elements(By.CSS_SELECTOR, "input[type='file']") or \
                         it.find_elements(By.XPATH, ".//div[@role='button'][contains(., 'Add file')]"):
                     if pdf_path and re.search(r"resume|cv|curriculum", title, re.I):
@@ -153,8 +215,9 @@ def fill_google_form(url: str, job: dict, resume_text: str, submit: bool, pdf_pa
                     questions.append((i, title, kind, options))
             if questions and drive.asks_for_resume_link([q[1] for q in questions]):
                 link = drive.get_resume_link(d, pdf_path, notes)  # a question wants a Drive link to the resume
-                if link:
-                    resume_text += f"\nResume link (Google Drive, anyone with the link can view): {link}\n"
+                if not link:  # never submit with a wrong/missing resume link
+                    return "blocked: could not create a Drive link for this job's resume - apply manually"
+                resume_text += f"\nResume link (Google Drive, anyone with the link can view): {link}\n"
             if questions:
                 answers = llm.chat_json(
                     "Answer job-application form questions as the candidate. " + FILL_RULES + " "
@@ -186,7 +249,10 @@ def fill_google_form(url: str, job: dict, resume_text: str, submit: bool, pdf_pa
                         css = "div[role='radio']" if kind == "radio" else "div[role='checkbox']"
                         attr = "data-value" if kind == "radio" else "data-answer-value"
                         for el in it.find_elements(By.CSS_SELECTOR, css):
-                            if el.get_attribute(attr) in wanted:
+                            # Google keeps drafts for signed-in users: only click when the state has to change
+                            checked = el.get_attribute("aria-checked") == "true"
+                            want = el.get_attribute(attr) in wanted
+                            if want != checked:
                                 el.click()
             btns = d.find_elements(By.XPATH, "//div[@role='button']//span[text()='Next' or text()='Submit']")
             if not btns:
@@ -198,7 +264,20 @@ def fill_google_form(url: str, job: dict, resume_text: str, submit: bool, pdf_pa
                 time.sleep(2)
                 return "submitted; " + "; ".join(notes)
             btns[0].click()
-            time.sleep(1)
+            time.sleep(1.2)
+            errors = _form_errors(d)
+            if errors and _fix_validation(d, job, resume_text, errors):  # e.g. "must be at least 700 characters"
+                d.find_elements(By.XPATH, "//div[@role='button']//span[text()='Next' or text()='Submit']")[0].click()
+                time.sleep(1.2)
+                errors = _form_errors(d)
+            if errors:  # the form still refuses to continue: say exactly which questions are the problem
+                notes.append("form rejected: " + "; ".join(f"{t[:30]} ({m[:50]})" for t, m in errors))
+                try:  # screenshot of where it got stuck, for the user
+                    os.makedirs("telegram_apply/output/proof", exist_ok=True)
+                    d.save_screenshot(f"telegram_apply/output/proof/stuck_{job.get('company', 'form')}.png".replace(" ", "_"))
+                except Exception:
+                    pass
+                return "stopped (form needs more answers - apply manually); " + "; ".join(notes)
         return "stopped before submit; " + "; ".join(notes)
     finally:
         d.quit()

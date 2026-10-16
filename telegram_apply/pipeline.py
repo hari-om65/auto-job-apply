@@ -92,7 +92,7 @@ def _process_job(job: dict, state: dict, min_ats: int) -> dict:
     status, manual_links = [], []
 
     for to in job["emails"][:1]:
-        mail = appliers.write_email_body(job, text_resume)
+        mail = appliers.compose_email(job, resume.email_profile(base), resume.signature_block(tailored))
         if send:
             appliers.send_email(to, mail["subject"], mail["body"], pdf)
         status.append(("emailed " if send else "dry-run: would email ") + to)
@@ -114,6 +114,7 @@ def _process_job(job: dict, state: dict, min_ats: int) -> dict:
 
     state["count"] += 1
     rec = {"job": label, "batch": batch, "fit": score, "ats": ats, "missing": missing, "pdf": pdf,
+           "added_keywords": resume.keywords_added(job, base, tailored),
            "base_resume": os.path.basename(cfg.base_resume_pdf), "status": "; ".join(status),
            "manual_links": manual_links}
     record(rec)

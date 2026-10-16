@@ -119,6 +119,7 @@ th{color:var(--mu);font-weight:600}.ok{color:var(--ok)}.wa{color:var(--wa)}.er{c
 <div><label>Min job fit (0-100)</label><input type=number id=min_match_score></div>
 <div><label>Min resume ATS % </label><input type=number id=min_ats_score></div>
 <div><label>Max applications/day</label><input type=number id=max_per_day></div></div>
+<div class=chk><input type=checkbox id=add_missing_keywords><span>Add job keywords I'm missing to the Skills section (be ready to discuss them)</span></div>
 <div class=chk><input type=checkbox id=dry_run><span><b>Dry run</b> - prepare resumes but don't send emails or submit forms</span></div>
 <div style="margin-top:14px" class=row><button id=save>Save settings</button><button class=sec id=run>Run now</button></div>
 <div class=chk><input type=checkbox id=reprocess><span>Re-process posts already seen (otherwise they are skipped)</span></div>
@@ -134,7 +135,7 @@ const esc=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt
 async function refresh(){
  const d=await (await fetch('/api/state')).json();
  if(!loaded){F.forEach(k=>$(k).value=Array.isArray(d.settings[k])?d.settings[k].join(', '):d.settings[k]);
-  $('enabled').checked=d.settings.enabled;$('dry_run').checked=d.settings.dry_run;loaded=true}
+  $('enabled').checked=d.settings.enabled;$('add_missing_keywords').checked=d.settings.add_missing_keywords;$('dry_run').checked=d.settings.dry_run;loaded=true}
  $('win').textContent=d.window;$('live').textContent=d.running?'running...':'idle';
  $('run').disabled=d.running;$('log').textContent=d.log.join('\\n')||'-';
  $('rows').innerHTML=d.results.map(r=>{
@@ -142,8 +143,8 @@ async function refresh(){
   const links=(r.manual_links||[]).map(l=>`<div><a href="${esc(l)}" target=_blank>open link</a></div>`).join('');
   const pdf=r.pdf?`<a href="/pdf/${encodeURIComponent(r.pdf.split('/').pop())}" target=_blank>${esc(r.pdf.split('/').pop())}</a><div class=mu>new resume, tailored from ${esc(r.base_resume||'base resume')}</div>`:'<span class=mu>-</span>';
   return `<tr><td class=mu>${esc((r.time||'').replace('T',' ').slice(5,16))}</td><td>${esc(r.job)}</td><td>${esc(r.batch??'')}</td><td>${esc(r.fit??'')}</td><td>${r.ats!=null?esc(r.ats)+'%':''}</td>
-  <td class=${c}>${esc(r.status)}${links}</td><td>${pdf}</td></tr>`}).join('')||'<tr><td colspan=7 class=mu>No results yet</td></tr>'}
-$('save').onclick=async()=>{const b={enabled:$('enabled').checked,dry_run:$('dry_run').checked};
+  <td class=${c}>${esc(r.status)}${links}${(r.added_keywords||[]).length?`<div class=mu>Skills added (learn these): ${esc(r.added_keywords.join(', '))}</div>`:''}</td><td>${pdf}</td></tr>`}).join('')||'<tr><td colspan=7 class=mu>No results yet</td></tr>'}
+$('save').onclick=async()=>{const b={enabled:$('enabled').checked,dry_run:$('dry_run').checked,add_missing_keywords:$('add_missing_keywords').checked};
  F.forEach(k=>b[k]=['min_match_score','min_ats_score','max_per_day'].includes(k)?+$(k).value:$(k).value);
  await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});$('save').textContent='Saved';setTimeout(()=>$('save').textContent='Save settings',1200);refresh()};
 $('run').onclick=async()=>{await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reprocess:$('reprocess').checked})});refresh()};

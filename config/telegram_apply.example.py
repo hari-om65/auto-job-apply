@@ -39,6 +39,7 @@ candidate_profile = {
     "min_monthly_stipend_inr": 0,
     "notes": "Describe yourself in one line.",
 }
+add_missing_keywords = True   # add job keywords you do not have yet to the Skills section (never to experience/projects)
 required_batch = "2027"    # only apply to jobs open to this graduation year ("" = no filter)
 min_match_score = 60        # skip jobs the AI scores below this (0-100)
 target_ats_score = 85       # keyword coverage the resume should reach (0-100)
@@ -59,6 +60,8 @@ candidate_facts = {
     "current_location": "City, State, Country",
     "willing_to_relocate": "Yes",
     "total_experience": "1 year",
+    # Skills you REALLY have that are not obvious from your resume (e.g. "Excel", "n8n", "Zapier"). The resume writer may use them as keywords.
+    "extra_skills": [],
 }
 
 # Google Forms (Selenium). Chrome profile where you are logged into Google (needed for file-upload questions)

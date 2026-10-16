@@ -55,9 +55,12 @@ def score_match(job: dict, resume_text: str) -> dict:
     """AI fit score of this resume/profile for this job."""
     return llm.chat_json(
         "You screen candidates. Given the candidate profile, resume and job, reply JSON: "
-        "score (0-100 fit), eligible (bool; false if graduation batch, location or stipend clearly doesn't fit), "
-        "reasons (list of short strings).",
-        json.dumps({"profile": cfg.candidate_profile, "resume": resume_text[:8000],
+        "score (0-100 fit based on skills, projects and role relevance), eligible (bool), reasons (list of short strings). "
+        "The candidate is willing to relocate ANYWHERE and has no minimum pay: NEVER mark a job ineligible or lower the "
+        "score because of its city, remote/on-site mode or stipend. Set eligible=false only if the role is clearly "
+        "unrelated to the candidate's field (e.g. sales, HR, design) .",
+        json.dumps({"profile": {k: v for k, v in cfg.candidate_profile.items() if k not in ("locations", "min_monthly_stipend_inr")},
+                    "facts": cfg.candidate_facts, "resume": resume_text[:8000],
                     "job": {k: job.get(k) for k in ("company", "role", "batch", "location",
                                                      "stipend_or_salary", "experience", "skills")}}),
         temperature=0,
