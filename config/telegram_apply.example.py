@@ -66,3 +66,15 @@ candidate_facts = {
 
 # Google Forms (Selenium). Chrome profile where you are logged into Google (needed for file-upload questions)
 chrome_user_data_dir = "telegram_apply/chrome_profile"   # sign in once with: python -m telegram_apply.google_login   # e.g. r"C:\Users\you\AppData\Local\Google\Chrome\User Data\SeleniumProfile"
+
+# --- LinkedIn jobs (run from the dashboard through the Easy Apply bot) ---
+candidate_identity = {            # used for the LinkedIn / company application forms
+    "first_name": "FIRST", "middle_name": "", "last_name": "LAST", "phone_number": "0000000000",
+    "city": "City", "state": "State", "zipcode": "", "country": "India",
+}
+linkedin_answers = {              # answers to common Easy Apply questions (edit freely)
+    "years_of_experience": "1", "require_visa": "No", "legally_authorized": "Yes",
+    "desired_salary": 400000, "current_ctc": 0, "notice_period": 0,
+}
+linkedin_username = ""            # optional; otherwise sign in once: python -m telegram_apply.google_login linkedin
+linkedin_password = ""

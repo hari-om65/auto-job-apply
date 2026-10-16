@@ -40,6 +40,12 @@ from config.personals import *
 from config.questions import *
 from config.search import *
 from config.secrets import use_AI, username, password, ai_provider
+
+# Dashboard mode (telegram_apply/linkedin.py sets JA_TAILOR=1): skip jobs that do not match your roles and upload
+# a resume tailored to each job. Without it the bot behaves exactly as before.
+JA_DASHBOARD = bool(os.environ.get("JA_TAILOR"))
+if JA_DASHBOARD:
+    from telegram_apply import linkedin_hooks
 from config.settings import *
 
 from modules.open_chrome import *
@@ -653,7 +659,7 @@ def get_job_description(
 def upload_resume(modal: WebElement, resume: str) -> tuple[bool, str]:
     try:
         modal.find_element(By.NAME, "file").send_keys(os.path.abspath(resume))
-        return True, os.path.basename(default_resume_path)
+        return True, os.path.basename(resume)
     except: return False, "Previous resume"
 
 # Function to answer common questions for Easy Apply
@@ -1283,7 +1289,15 @@ def apply_to_jobs(search_terms: list[str]) -> None:
                         skip_count += 1
                         continue
 
-                    
+                    if JA_DASHBOARD:
+                        _aligned, _why = linkedin_hooks.fit_ok(title, company, description)
+                        if not _aligned:
+                            print_lg(f'Not aligned with your target roles: {_why}')
+                            failed_job(job_id, job_link, resume, date_listed, "Not aligned with target roles", _why, "Skipped", screenshot_name)
+                            rejected_jobs.add(job_id)
+                            skip_count += 1
+                            continue
+
                     if use_AI and description != "Unknown":
                         try:
                             skills = extract_skills(aiClient, description)
@@ -1355,7 +1369,11 @@ def apply_to_jobs(search_terms: list[str]) -> None:
                                             'Skipping "{}" - no answer in config/questions.py for:\n  {}'.format(
                                                 title, "\n  ".join(sorted(unanswered_questions))))
                                     blocked_questions = set(unanswered_questions)
-                                    if useNewResume and not uploaded: uploaded, resume = upload_resume(modal, default_resume_path)
+                                    if JA_DASHBOARD:
+                                        if not uploaded:
+                                            _pdf = linkedin_hooks.tailored_pdf(title, company, description)
+                                            if _pdf: uploaded, resume = upload_resume(modal, _pdf)
+                                    elif useNewResume and not uploaded: uploaded, resume = upload_resume(modal, default_resume_path)
                                     # Scoped to the dialog on purpose: a document-wide search
                                     # for "Next" matches the search results PAGINATION control
                                     # (aria-label "View next page") and paged away mid-application.
@@ -1379,6 +1397,8 @@ def apply_to_jobs(search_terms: list[str]) -> None:
                                 cur_pause_before_submit = pause_before_submit
                                 if errored == "stuck":
                                     discard_reason = "Required questions left unanswered."
+                                elif JA_DASHBOARD and not uploaded:
+                                    discard_reason = "This job's tailored resume could not be uploaded, so it was not submitted with another resume."
                                 elif stop_before_submit:
                                     print_lg('"stop_before_submit" is on: reached the Review step with everything filled in. Discarding this application instead of submitting it.')
                                     raise StoppedBeforeSubmit("Reached Review with everything filled in, then discarded because stop_before_submit is on.")
@@ -1569,7 +1589,7 @@ def main() -> None:
             timeSaved += 60
             timeSavedMsg = f"In this run, you saved approx {round(timeSaved/60)} mins ({timeSaved} secs), please consider supporting the project."
         msg = f"{quotes}\n\n\n{timeSavedMsg}\nYou can also get your quote and name shown here, or prioritize your bug reports by supporting the project at:\n\nhttps://github.com/sponsors/GodsScion\n\n\nSummary:\n{summary}\n\n\nBest regards,\nSai Vignesh Golla\nhttps://www.linkedin.com/in/saivigneshgolla/\n\nTop Sponsors:\n{sponsors}"
-        pyautogui.alert(msg, "Exiting..")
+        if not JA_DASHBOARD: pyautogui.alert(msg, "Exiting..")
         print_lg(msg,"Closing the browser...")
         if tabs_count >= 10:
             msg = "NOTE: IF YOU HAVE MORE THAN 10 TABS OPENED, PLEASE CLOSE OR BOOKMARK THEM!\n\nOr it's highly likely that application will just open browser and not do anything next time!" 

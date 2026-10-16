@@ -19,6 +19,14 @@ DEFAULTS = {
     "min_match_score": cfg.min_match_score,
     "min_ats_score": 0,          # don't apply when the tailored resume covers less than this % of job keywords
     "max_per_day": cfg.max_applications_per_day,
+    # LinkedIn: jobs posted in the last 24 hours that match these roles
+    "linkedin_enabled": False,                       # run automatically every day
+    "linkedin_run_time": "10:00",
+    "linkedin_roles": list(cfg.candidate_profile["target_roles"]),
+    "linkedin_location": "India",
+    "linkedin_external": True,                       # also apply on company sites for non-Easy-Apply jobs
+    "linkedin_per_search": 15,                       # max jobs per role per run
+    "linkedin_last_run_date": "",
     "last_run_date": "",
 }
 

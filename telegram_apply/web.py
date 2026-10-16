@@ -1,20 +1,50 @@
-"""Control panel for the daily Telegram pipeline.  Run: python -m telegram_apply.web  ->  http://localhost:5055"""
+"""Control panel for the daily job pipelines (Telegram channels + LinkedIn).
+
+Run: python -m telegram_apply.web  ->  http://localhost:5055   (login: admin / the password in dashboard_password.txt)
+For a public link use: python -m telegram_apply.live
+"""
+import hmac
 import json
 import os
+import secrets
 import threading
 import time
 from datetime import datetime
-from flask import Flask, jsonify, request, send_from_directory
-from . import pipeline, settings_store
+from flask import Flask, Response, jsonify, request, send_from_directory
+from . import linkedin, pipeline, settings_store
 
 app = Flask(__name__)
 status = {"running": False, "log": []}
+li_status = {"log": []}
 _lock = threading.Lock()
+PASSWORD_FILE = "telegram_apply/dashboard_password.txt"
+
+
+def dashboard_password() -> str:
+    """Password for the dashboard (Basic auth, user 'admin'). Generated once and kept in a git-ignored file."""
+    if not os.path.exists(PASSWORD_FILE):
+        with open(PASSWORD_FILE, "w") as f:
+            f.write(secrets.token_urlsafe(12))
+    with open(PASSWORD_FILE) as f:
+        return f.read().strip()
+
+
+@app.before_request
+def require_login():
+    auth = request.authorization
+    if auth and auth.username == "admin" and hmac.compare_digest(auth.password or "", dashboard_password()):
+        return None
+    return Response("Login required", 401, {"WWW-Authenticate": 'Basic realm="Job dashboard"'})
 
 
 def log(msg: str) -> None:
     status["log"] = (status["log"] + [f"{datetime.now():%H:%M:%S}  {msg}"])[-200:]
     print(msg, flush=True)
+
+
+def li_log(msg: str) -> None:
+    li_status["log"] = (li_status["log"] + [f"{datetime.now():%H:%M:%S}  {msg}"])[-300:]
+    print("[linkedin]", msg, flush=True)
 
 
 def run_pipeline(reprocess: bool = False) -> bool:
@@ -35,16 +65,28 @@ def run_pipeline(reprocess: bool = False) -> bool:
     return True
 
 
+def run_linkedin() -> bool:
+    if linkedin.is_running():
+        return False
+    threading.Thread(target=linkedin.run_once, args=(li_log,), daemon=True).start()
+    return True
+
+
 def scheduler() -> None:
-    """Start the daily run once the configured time has passed and it hasn't run today."""
+    """Start each daily run once its time has passed and it has not run today."""
     while True:
         try:
             s = settings_store.load()
             now = datetime.now()
-            if s["enabled"] and s["last_run_date"] != str(now.date()) and f"{now:%H:%M}" >= s["run_time"]:
+            hhmm = f"{now:%H:%M}"
+            if s["enabled"] and s["last_run_date"] != str(now.date()) and hhmm >= s["run_time"]:
                 if run_pipeline():
                     settings_store.save({"last_run_date": str(now.date())})
                     log("Scheduled daily run triggered")
+            if s["linkedin_enabled"] and s["linkedin_last_run_date"] != str(now.date()) and hhmm >= s["linkedin_run_time"]:
+                if run_linkedin():
+                    settings_store.save({"linkedin_last_run_date": str(now.date())})
+                    li_log("Scheduled daily LinkedIn run triggered")
         except Exception as e:
             log(f"scheduler error: {e}")
         time.sleep(30)
@@ -59,20 +101,33 @@ def api_state():
     s = settings_store.load()
     start, end = pipeline.compute_window(s)
     return jsonify(settings=s, running=status["running"], log=status["log"][-80:], results=results,
-                   window=f"{start:%d %b %H:%M} -> {end:%d %b %H:%M}")
+                   window=f"{start:%d %b %H:%M} -> {end:%d %b %H:%M}",
+                   linkedin={"running": linkedin.is_running(), "log": li_status["log"][-80:], "results": linkedin.recent(80)})
 
 
 @app.post("/api/settings")
 def api_settings():
     d = request.get_json()
-    if isinstance(d.get("channels"), str):
-        d["channels"] = [c.strip() for c in d["channels"].split(",") if c.strip()]
+    for key in ("channels", "linkedin_roles"):
+        if isinstance(d.get(key), str):
+            d[key] = [c.strip() for c in d[key].split(",") if c.strip()]
     return jsonify(settings_store.save(d))
 
 
 @app.post("/api/run")
 def api_run():
     return jsonify(started=run_pipeline(bool((request.get_json(silent=True) or {}).get("reprocess"))))
+
+
+@app.post("/api/linkedin/run")
+def api_linkedin_run():
+    return jsonify(started=run_linkedin())
+
+
+@app.post("/api/linkedin/stop")
+def api_linkedin_stop():
+    linkedin.stop()
+    return jsonify(stopped=True)
 
 
 @app.get("/pdf/<path:name>")
@@ -102,9 +157,13 @@ pre{margin:0;max-height:210px;overflow:auto;font-size:12px;background:var(--bg);
 table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:7px 6px;border-bottom:1px solid var(--bd);vertical-align:top}
 th{color:var(--mu);font-weight:600}.ok{color:var(--ok)}.wa{color:var(--wa)}.er{color:var(--er)}.mu{color:var(--mu)}
 .pill{display:inline-block;padding:2px 8px;border-radius:99px;font-size:12px;border:1px solid var(--bd)}a{color:var(--ac)}
-.wrap{overflow-x:auto}
+.wrap{overflow-x:auto}.tabs{display:flex;gap:8px;margin-bottom:16px}.tabs button{background:transparent;color:var(--tx);border:1px solid var(--bd)}
+.tabs button.on{background:var(--ac);color:#fff;border-color:var(--ac)}.hide{display:none}
 </style></head><body><main>
 <h1>Job pipeline <span id=live class=pill>idle</span></h1>
+<div class=tabs><button id=tab_tg class=on>Telegram channels</button><button id=tab_li>LinkedIn (last 24 hours)</button></div>
+
+<section id=sec_tg>
 <div class=grid>
 <div class=card><h2>Daily schedule</h2>
 <div class=chk><input type=checkbox id=enabled><span>Run automatically every day (keep this page's server running)</span></div>
@@ -120,7 +179,7 @@ th{color:var(--mu);font-weight:600}.ok{color:var(--ok)}.wa{color:var(--wa)}.er{c
 <div><label>Min resume ATS % </label><input type=number id=min_ats_score></div>
 <div><label>Max applications/day</label><input type=number id=max_per_day></div></div>
 <div class=chk><input type=checkbox id=add_missing_keywords><span>Add job keywords I'm missing to the Skills section (be ready to discuss them)</span></div>
-<div class=chk><input type=checkbox id=dry_run><span><b>Dry run</b> - prepare resumes but don't send emails or submit forms</span></div>
+<div class=chk><input type=checkbox id=dry_run><span><b>Dry run</b> - prepare resumes but don't send emails or submit forms (also applies to LinkedIn)</span></div>
 <div style="margin-top:14px" class=row><button id=save>Save settings</button><button class=sec id=run>Run now</button></div>
 <div class=chk><input type=checkbox id=reprocess><span>Re-process posts already seen (otherwise they are skipped)</span></div>
 </div>
@@ -128,31 +187,67 @@ th{color:var(--mu);font-weight:600}.ok{color:var(--ok)}.wa{color:var(--wa)}.er{c
 </div>
 <div class=card style="margin-top:16px"><h2>Results</h2><div class=wrap><table><thead><tr>
 <th>Time</th><th>Job</th><th>Batch</th><th>Fit</th><th>ATS</th><th>Outcome</th><th>Resume used</th></tr></thead><tbody id=rows></tbody></table></div></div>
+</section>
+
+<section id=sec_li class=hide>
+<div class=grid>
+<div class=card><h2>LinkedIn: jobs posted in the last 24 hours</h2>
+<div class=mu>Searches your roles, keeps only jobs from the last 24 hours that match them, and applies with a resume tailored to each job
+(Easy Apply, and company sites for the rest). Sign in to LinkedIn once: <code>python -m telegram_apply.google_login linkedin</code></div>
+<div class=chk><input type=checkbox id=linkedin_enabled><span>Run automatically every day</span></div>
+<label>Daily run time</label><input type=time id=linkedin_run_time>
+<label>Roles to search (comma separated)</label><input type=text id=linkedin_roles>
+<div class=row><div><label>Location</label><input type=text id=linkedin_location></div>
+<div><label>Max jobs per role per run</label><input type=number id=linkedin_per_search></div></div>
+<div class=chk><input type=checkbox id=linkedin_external><span>Also apply on company sites when a job is not Easy Apply</span></div>
+<div class=mu style="margin-top:8px">Dry run (on the Telegram tab) is shared: while it is on, applications are filled but not submitted.</div>
+<div style="margin-top:14px" class=row><button id=save2>Save settings</button><button class=sec id=li_run>Run LinkedIn now</button><button class=sec id=li_stop>Stop</button></div>
+</div>
+<div class=card><h2>LinkedIn log</h2><pre id=li_log>-</pre></div>
+</div>
+<div class=card style="margin-top:16px"><h2>LinkedIn jobs</h2><div class=wrap><table><thead><tr>
+<th>When</th><th>Job</th><th>Company</th><th>Outcome</th><th>Resume used</th><th>Link</th></tr></thead><tbody id=li_rows></tbody></table></div></div>
+</section>
 </main><script>
-const $=id=>document.getElementById(id);const F=['window_start_date','window_end_date','required_batch','run_time','window_start','window_end','channels','min_match_score','min_ats_score','max_per_day'];
+const $=id=>document.getElementById(id);
+const F=['window_start_date','window_end_date','required_batch','run_time','window_start','window_end','channels','min_match_score','min_ats_score','max_per_day',
+ 'linkedin_run_time','linkedin_roles','linkedin_location','linkedin_per_search'];
+const NUM=['min_match_score','min_ats_score','max_per_day','linkedin_per_search'];
+const CHK=['enabled','dry_run','add_missing_keywords','linkedin_enabled','linkedin_external'];
 let loaded=false;
 const esc=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+function tab(t){$('sec_tg').classList.toggle('hide',t!=='tg');$('sec_li').classList.toggle('hide',t!=='li');$('tab_tg').classList.toggle('on',t==='tg');$('tab_li').classList.toggle('on',t==='li')}
+$('tab_tg').onclick=()=>tab('tg');$('tab_li').onclick=()=>tab('li');
 async function refresh(){
  const d=await (await fetch('/api/state')).json();
  if(!loaded){F.forEach(k=>$(k).value=Array.isArray(d.settings[k])?d.settings[k].join(', '):d.settings[k]);
-  $('enabled').checked=d.settings.enabled;$('add_missing_keywords').checked=d.settings.add_missing_keywords;$('dry_run').checked=d.settings.dry_run;loaded=true}
- $('win').textContent=d.window;$('live').textContent=d.running?'running...':'idle';
+  CHK.forEach(k=>$(k).checked=!!d.settings[k]);loaded=true}
+ $('win').textContent=d.window;$('live').textContent=(d.running||d.linkedin.running)?'running...':'idle';
  $('run').disabled=d.running;$('log').textContent=d.log.join('\\n')||'-';
+ $('li_run').disabled=d.linkedin.running;$('li_log').textContent=d.linkedin.log.join('\\n')||'-';
  $('rows').innerHTML=d.results.map(r=>{
   const c=/^(emailed|form: submitted)/.test(r.status)?'ok':/^dry-run/.test(r.status)?'wa':/error/.test(r.status)?'er':/manual|queued/.test(r.status)?'wa':'mu';
   const links=(r.manual_links||[]).map(l=>`<div><a href="${esc(l)}" target=_blank>open link</a></div>`).join('');
   const pdf=r.pdf?`<a href="/pdf/${encodeURIComponent(r.pdf.split('/').pop())}" target=_blank>${esc(r.pdf.split('/').pop())}</a><div class=mu>new resume, tailored from ${esc(r.base_resume||'base resume')}</div>`:'<span class=mu>-</span>';
   return `<tr><td class=mu>${esc((r.time||'').replace('T',' ').slice(5,16))}</td><td>${esc(r.job)}</td><td>${esc(r.batch??'')}</td><td>${esc(r.fit??'')}</td><td>${r.ats!=null?esc(r.ats)+'%':''}</td>
-  <td class=${c}>${esc(r.status)}${links}${(r.added_keywords||[]).length?`<div class=mu>Skills added (learn these): ${esc(r.added_keywords.join(', '))}</div>`:''}</td><td>${pdf}</td></tr>`}).join('')||'<tr><td colspan=7 class=mu>No results yet</td></tr>'}
-$('save').onclick=async()=>{const b={enabled:$('enabled').checked,dry_run:$('dry_run').checked,add_missing_keywords:$('add_missing_keywords').checked};
- F.forEach(k=>b[k]=['min_match_score','min_ats_score','max_per_day'].includes(k)?+$(k).value:$(k).value);
- await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});$('save').textContent='Saved';setTimeout(()=>$('save').textContent='Save settings',1200);refresh()};
+  <td class=${c}>${esc(r.status)}${links}${(r.added_keywords||[]).length?`<div class=mu>Skills added (learn these): ${esc(r.added_keywords.join(', '))}</div>`:''}</td><td>${pdf}</td></tr>`}).join('')||'<tr><td colspan=7 class=mu>No results yet</td></tr>';
+ $('li_rows').innerHTML=d.linkedin.results.map(r=>{
+  const c=/Easy Applied/.test(r.status)?'ok':/skipped|not submitted/.test(r.status)?'mu':'wa';
+  return `<tr><td class=mu>${esc(r.time)}</td><td>${esc(r.title)}</td><td>${esc(r.company)}</td><td class=${c}>${esc(r.status)}</td>
+  <td>${esc(r.resume)}</td><td>${r.link?`<a href="${esc(r.link)}" target=_blank>open</a>`:''}</td></tr>`}).join('')||'<tr><td colspan=6 class=mu>No LinkedIn jobs yet</td></tr>'}
+async function save(btn){const b={};CHK.forEach(k=>b[k]=$(k).checked);
+ F.forEach(k=>b[k]=NUM.includes(k)?+$(k).value:$(k).value);
+ await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});btn.textContent='Saved';setTimeout(()=>btn.textContent='Save settings',1200);refresh()}
+$('save').onclick=()=>save($('save'));$('save2').onclick=()=>save($('save2'));
 $('run').onclick=async()=>{await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reprocess:$('reprocess').checked})});refresh()};
+$('li_run').onclick=async()=>{await save($('save2'));await fetch('/api/linkedin/run',{method:'POST'});refresh()};
+$('li_stop').onclick=async()=>{await fetch('/api/linkedin/stop',{method:'POST'});refresh()};
 refresh();setInterval(refresh,4000);
 </script></body></html>"""
 
 
 if __name__ == "__main__":
     threading.Thread(target=scheduler, daemon=True).start()
-    print("Open http://localhost:5055")
-    app.run(host="127.0.0.1", port=5055)
+    print("Open http://localhost:5055   login: admin / password in", PASSWORD_FILE)
+    dashboard_password()
+    app.run(host="127.0.0.1", port=5055, threaded=True)

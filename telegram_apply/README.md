@@ -36,3 +36,18 @@ Dry run is ON by default: everything is prepared but nothing is sent or submitte
 - Application emails are 120-150 words about you, then your name, email, phone, LinkedIn and GitHub, with the PDF attached.
 - Optional setting `add_missing_keywords` adds job keywords you do not have to the Skills section only (never to
   experience); the results table lists them so you know what to learn before interviews.
+
+## LinkedIn jobs (dashboard tab "LinkedIn")
+- Runs the project's Easy Apply bot with your settings, only for jobs **posted in the last 24 hours** that match your roles.
+  The bot is started by the dashboard (`runAiBot.py` with `JA_TAILOR=1`); without that variable it behaves exactly as before.
+- Each job is checked against your roles/profile (not aligned or senior-level jobs are skipped) and gets **its own tailored resume**.
+  If that resume cannot be uploaded, the job is not submitted with a different resume.
+- Jobs that are not Easy Apply are opened on the company site and applied to with the same tailored resume.
+- Fill `candidate_identity` and `linkedin_answers` in `config/telegram_apply.py`; sign in once with
+  `python -m telegram_apply.google_login linkedin`. Dry run (shared with the Telegram tab) fills applications without submitting.
+- LinkedIn's terms restrict automation; use it at your own risk and keep the daily volume modest.
+
+## Public link from your own PC
+`python -m telegram_apply.live` starts the dashboard and a free Cloudflare quick tunnel and prints an https link.
+Login: user `admin`, password in `telegram_apply/dashboard_password.txt` (generated on first start, git-ignored).
+The link changes each time you start it and the PC must stay on.

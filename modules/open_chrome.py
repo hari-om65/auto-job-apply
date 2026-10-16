@@ -82,6 +82,9 @@ def createChromeSession(isRetry: bool = False):
     profile_dir = find_default_profile_directory()
     if isRetry:
         print_lg("Will login with a guest profile, browsing history will not be saved in the browser!")
+    elif os.environ.get("JA_CHROME_PROFILE"):  # dashboard: the dedicated profile where LinkedIn/Google are signed in
+        options.add_argument(f"--user-data-dir={os.environ['JA_CHROME_PROFILE']}")
+        print_lg("Using the dashboard Chrome profile (stay signed in to LinkedIn).")
     elif profile_dir and not safe_mode:
         options.add_argument(f"--user-data-dir={profile_dir}")
     else:

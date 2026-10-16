@@ -32,3 +32,11 @@ telegram_apply/results.jsonl
 telegram_apply/ui_settings.json
 telegram_apply/chrome_profile/
 telegram_apply/llm_cache.jsonl
+telegram_apply/dashboard_password.txt
+telegram_apply/linkedin_state.json
+telegram_apply/bin/
+user_config.json
+all excels/
+all resumes/
+logs/
+telegram_apply/live_url.txt
