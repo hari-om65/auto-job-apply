@@ -22,3 +22,13 @@ apikeys.py
 user_config.json
 .bot_run.log
 .bot_run.pid
+# Telegram auto-apply: secrets, session and personal data
+config/telegram_apply.py
+telegram_apply/*.session
+telegram_apply/base_resume.pdf
+telegram_apply/output/
+telegram_apply/state.json
+telegram_apply/results.jsonl
+telegram_apply/ui_settings.json
+telegram_apply/chrome_profile/
+telegram_apply/llm_cache.jsonl
