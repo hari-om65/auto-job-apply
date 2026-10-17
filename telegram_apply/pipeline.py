@@ -114,7 +114,7 @@ def _process_job(job: dict, state: dict, min_ats: int) -> dict:
 
     state["count"] += 1
     rec = {"job": label, "batch": batch, "fit": score, "ats": ats, "missing": missing, "pdf": pdf,
-           "added_keywords": resume.keywords_added(job, base, tailored),
+           "added_keywords": resume.keywords_added(job, base, tailored), "page_fill": resume.page_fill(tailored),
            "base_resume": os.path.basename(cfg.base_resume_pdf), "status": "; ".join(status),
            "manual_links": manual_links}
     record(rec)

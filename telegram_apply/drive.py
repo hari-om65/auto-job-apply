@@ -171,12 +171,14 @@ def upload_to_drive(d, pdf_path: str) -> str | None:
 def get_resume_link(d, pdf_path: str, notes: list) -> str | None:
     """Shareable 'anyone with the link' Drive link of THIS job's tailored resume (uploaded once, then cached).
     Retries once. Returns None on failure - the base resume is never substituted."""
-    if pdf_path in _cache:
-        return _cache[pdf_path]
+    st = os.stat(pdf_path) if pdf_path and os.path.exists(pdf_path) else None
+    key = (pdf_path, st.st_mtime_ns, st.st_size) if st else pdf_path     # a re-rendered resume must get a fresh link
+    if key in _cache:
+        return _cache[key]
     for _ in range(2):
         link = upload_to_drive(d, pdf_path) if pdf_path else None
         if link:
-            _cache[pdf_path] = link
+            _cache[key] = link
             return link
     notes.append("could not create the Drive link for this job's resume")
     return None
