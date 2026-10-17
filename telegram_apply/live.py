@@ -17,6 +17,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 from email.message import EmailMessage
 from config import telegram_apply as cfg
@@ -60,6 +61,25 @@ def email_link(public: str) -> None:
         print("Could not email the link:", type(e).__name__, flush=True)
 
 
+def watchdog(proc: subprocess.Popen, public: str) -> None:
+    """Free quick tunnels sometimes die silently. If the public link stops answering, kill the tunnel so it restarts."""
+    time.sleep(90)  # a new link needs a moment before it resolves
+    bad = 0
+    while proc.poll() is None:
+        try:
+            urllib.request.urlopen(public, timeout=20)
+            bad = 0
+        except urllib.error.HTTPError as e:
+            bad = bad + 1 if e.code in (502, 503, 504, 530) else 0   # 401 = the login page = healthy
+        except Exception:
+            bad += 1
+        if bad >= 3:
+            print("Public link stopped answering, restarting the tunnel...", flush=True)
+            proc.kill()
+            return
+        time.sleep(60)
+
+
 def run_tunnel(password: str) -> None:
     proc = subprocess.Popen([ensure_cloudflared(), "tunnel", "--url", f"http://127.0.0.1:{PORT}", "--no-autoupdate"],
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
@@ -73,6 +93,7 @@ def run_tunnel(password: str) -> None:
                 f.write(public)
             print("\n" + "=" * 60 + f"\nLIVE DASHBOARD: {public}\nlogin: admin   password: {password}\n" + "=" * 60, flush=True)
             threading.Thread(target=email_link, args=(public,), daemon=True).start()
+            threading.Thread(target=watchdog, args=(proc, public), daemon=True).start()
     proc.wait()
 
 
