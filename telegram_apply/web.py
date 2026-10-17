@@ -132,7 +132,7 @@ def api_linkedin_stop():
 
 @app.get("/pdf/<path:name>")
 def pdf(name):
-    return send_from_directory(os.path.abspath("telegram_apply/output"), os.path.basename(name))
+    return send_from_directory(os.path.abspath("telegram_apply/output"), name)  # safe_join blocks ../ escapes
 
 
 @app.get("/")
@@ -228,7 +228,7 @@ async function refresh(){
  $('rows').innerHTML=d.results.map(r=>{
   const c=/^(emailed|form: submitted)/.test(r.status)?'ok':/^dry-run/.test(r.status)?'wa':/error/.test(r.status)?'er':/manual|queued/.test(r.status)?'wa':'mu';
   const links=(r.manual_links||[]).map(l=>`<div><a href="${esc(l)}" target=_blank>open link</a></div>`).join('');
-  const pdf=r.pdf?`<a href="/pdf/${encodeURIComponent(r.pdf.split('/').pop())}" target=_blank>${esc(r.pdf.split('/').pop())}</a><div class=mu>new resume, tailored from ${esc(r.base_resume||'base resume')}</div>`:'<span class=mu>-</span>';
+  const rel=r.pdf?r.pdf.split(String.fromCharCode(92)).join('/').split('output/').pop():'';const pdf=r.pdf?`<a href="/pdf/${rel.split('/').map(encodeURIComponent).join('/')}" target=_blank>${esc(rel.split('/').pop())}</a><div class=mu>made for: ${esc(rel.split('/').slice(0,-1).join(' / '))}</div>`:'<span class=mu>-</span>';
   return `<tr><td class=mu>${esc((r.time||'').replace('T',' ').slice(5,16))}</td><td>${esc(r.job)}</td><td>${esc(r.batch??'')}</td><td>${esc(r.fit??'')}</td><td>${r.ats!=null?esc(r.ats)+'%':''}</td>
   <td class=${c}>${esc(r.status)}${links}${(r.added_keywords||[]).length?`<div class=mu>Skills added (learn these): ${esc(r.added_keywords.join(', '))}</div>`:''}</td><td>${pdf}</td></tr>`}).join('')||'<tr><td colspan=7 class=mu>No results yet</td></tr>';
  $('li_rows').innerHTML=d.linkedin.results.map(r=>{

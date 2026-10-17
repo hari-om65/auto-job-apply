@@ -145,7 +145,7 @@ def _apply_external(s: dict, log) -> None:
             if found:
                 job.update({k: found[0].get(k) for k in ("skills", "responsibilities", "summary")})
             tailored, ats, missing = resume.build_tailored_resume(job, base)
-            pdf = resume.render_pdf(tailored, f"{resume.OUT_DIR}/{resume.safe_name('LinkedIn', r['Company'], r['Title'])}.pdf")
+            pdf = resume.render_pdf(tailored, resume.cv_pdf_path(tailored, 'LinkedIn', r['Company'], r['Title']))
             status = site_apply.apply_to_site(r["External Job link"], job, resume.profile_text(tailored), pdf, not s["dry_run"])
             rec = {"job": label, "source": "LinkedIn external", "ats": ats, "pdf": pdf, "status": "site: " + status,
                    "manual_links": [r["External Job link"]] if "manual" in status else [],

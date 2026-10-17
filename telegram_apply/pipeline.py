@@ -86,7 +86,7 @@ def _process_job(job: dict, state: dict, min_ats: int) -> dict:
     tailored, ats, missing = resume.build_tailored_resume(job, base)
     if ats < min_ats:
         return skip(f"resume covers only {ats}% of job keywords", fit=score, ats=ats, missing=missing)
-    pdf = resume.render_pdf(tailored, f"{resume.OUT_DIR}/{resume.safe_name(job.get('company'), job.get('role'))}.pdf")
+    pdf = resume.render_pdf(tailored, resume.cv_pdf_path(tailored, job.get('company'), job.get('role')))
     text_resume = resume.profile_text(tailored)
     send = not cfg.dry_run
     status, manual_links = [], []

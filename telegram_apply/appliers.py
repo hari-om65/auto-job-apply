@@ -27,10 +27,14 @@ def compose_email(job: dict, resume_text: str, signature: str) -> dict:
             json.dumps({"job": {k: job.get(k) for k in ("company", "role", "skills")}, "profile": resume_text[:5000]}),
             temperature=0.4,
         )
-        words = len(str(mail.get("body", "")).split())
-        if 120 <= words <= 150:
+        text = str(mail.get("body", ""))
+        words = len(text.split())
+        # skills the JOB asks for that are not in the candidate's real profile must never be claimed in the email
+        claimed = [k for k in (job.get("skills") or []) if k and k.lower() in text.lower() and k.lower() not in resume_text.lower()]
+        if 120 <= words <= 150 and not claimed:
             break
-        feedback = f" Your last body had {words} words. It MUST be 120-150 words."
+        feedback = (f" Your last body had {words} words (it MUST be 120-150)."
+                    + (f" It wrongly claimed these skills the candidate does not have: {claimed}. Do NOT mention them." if claimed else ""))
     mail["body"] = f"{mail['body'].strip()}\n\nRegards,\n{signature}\nResume: attached (PDF)"
     return mail
 

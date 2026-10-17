@@ -45,7 +45,7 @@ def tailored_pdf(title: str, company: str, description: str) -> str | None:
         try:
             job = _job(title, company, description)
             tailored, _ats, _missing = resume.build_tailored_resume(job, _base_text())
-            path = f"{resume.OUT_DIR}/LinkedIn_{resume.safe_name(company, title)}.pdf"
+            path = resume.cv_pdf_path(tailored, "LinkedIn", company, title)
             _pdf_cache[key] = os.path.abspath(resume.render_pdf(tailored, path))
         except Exception:
             _pdf_cache[key] = None

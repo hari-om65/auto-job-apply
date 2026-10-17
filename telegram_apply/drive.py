@@ -4,7 +4,10 @@ Everything runs in the same Chrome window / profile that is signed in to Google 
 """
 import os
 import re
+import shutil
+import tempfile
 import time
+import uuid
 from pypdf import PdfReader
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -59,12 +62,46 @@ def _drive_file_id(d, stem: str, timeout: int = 40) -> str | None:
     return None
 
 
+def _rename_in_drive(d, current_stem: str, new_name: str) -> bool:
+    """Rename the just-uploaded file (found by its unique temporary name) in the Drive list. Best effort."""
+    from urllib.parse import quote
+    from selenium.webdriver.common.keys import Keys
+    try:
+        d.get("https://drive.google.com/drive/search?q=" + quote(current_stem))
+        end = time.time() + 30
+        row = None
+        while time.time() < end and row is None:
+            row = next((r for r in d.find_elements(By.CSS_SELECTOR, "[data-id]") if current_stem in (r.text or "")), None)
+            time.sleep(1)
+        if row is None:
+            return False
+        row.click()
+        time.sleep(0.8)
+        from selenium.webdriver.common.action_chains import ActionChains
+        ActionChains(d).key_down(Keys.CONTROL).key_down(Keys.ALT).send_keys("e").key_up(Keys.ALT).key_up(Keys.CONTROL).perform()
+        time.sleep(1.5)                                   # Rename dialog opens with its text box focused
+        box = d.switch_to.active_element
+        box.send_keys(Keys.CONTROL, "a")
+        box.send_keys(new_name)
+        box.send_keys(Keys.ENTER)
+        time.sleep(3)
+        d.get("https://drive.google.com/drive/search?q=" + quote(current_stem))   # renamed = the temporary name is gone
+        time.sleep(5)
+        return not any(current_stem in (r.text or "") for r in d.find_elements(By.CSS_SELECTOR, "[data-id]"))
+    except Exception:
+        return False
+
+
 def upload_to_drive(d, pdf_path: str) -> str | None:
     """Upload exactly this job's PDF to Drive in a new tab, share it as 'Anyone with the link' (viewer), and return
     the link. Returns None if any step fails - the caller must NOT substitute another resume silently."""
     import pyautogui  # Drive's "File upload" opens a native Windows dialog; we type the path into it
 
-    pdf_abs = os.path.abspath(pdf_path)
+    final_name = os.path.basename(os.path.abspath(pdf_path))             # e.g. Hari_Om_Singh_CV.pdf (same for every job)
+    token = uuid.uuid4().hex[:8]
+    tmp_dir = tempfile.mkdtemp(prefix="cv_upload_")
+    pdf_abs = os.path.join(tmp_dir, f"{os.path.splitext(final_name)[0]}__{token}.pdf")
+    shutil.copy(os.path.abspath(pdf_path), pdf_abs)                      # unique name: Drive search finds exactly this file
     stem = os.path.splitext(os.path.basename(pdf_abs))[0]
     main = d.current_window_handle
     d.switch_to.new_window("tab")
@@ -93,6 +130,7 @@ def upload_to_drive(d, pdf_path: str) -> str | None:
         file_id = _drive_file_id(d, stem)
         if not file_id:
             return None
+        _rename_in_drive(d, stem, final_name)     # recruiters see "<Your_Name>_CV.pdf", not the temporary name
 
         # open the file and share it with "Anyone with the link" (viewer)
         d.get(f"https://drive.google.com/file/d/{file_id}/view")
@@ -144,9 +182,19 @@ def get_resume_link(d, pdf_path: str, notes: list) -> str | None:
     return None
 
 
+def _attached(d, title: str, file_name: str) -> bool:
+    """True when the form question `title` now lists `file_name` as an attached file."""
+    for it in d.find_elements(By.CSS_SELECTOR, "div[role='listitem']"):
+        if title in it.text and file_name in it.text:
+            return True
+    return False
+
+
 def upload_in_google_form(d, item, pdf_path: str, notes: list, title: str) -> bool:
-    """Handle a Google Forms 'file upload' question: Add file -> pick PDF -> Upload."""
+    """Handle a Google Forms 'file upload' question: Add file -> pick this job's PDF. Only returns True when the file
+    name really shows up on the form (the dialog can stay open without attaching anything)."""
     pdf_abs = os.path.abspath(pdf_path)
+    file_name = os.path.basename(pdf_abs)
     try:
         btn = next(b for b in item.find_elements(By.CSS_SELECTOR, "div[role='button']")
                    if "add file" in (b.text + (b.get_attribute("aria-label") or "")).lower())
@@ -158,21 +206,34 @@ def upload_in_google_form(d, item, pdf_path: str, notes: list, title: str) -> bo
             time.sleep(0.5)
         if frame is None:
             raise RuntimeError("upload dialog did not open")
+
+        # method 1: hand the file to the dialog's hidden file input
         d.switch_to.frame(frame)
-        inp = None
-        for _ in range(2):
-            found = d.find_elements(By.CSS_SELECTOR, "input[type='file']")
-            if found:
-                inp = found[0]
-                break
-            _click_xpath(d, "//*[normalize-space()='Browse']", 3)
-        if inp is None:
-            raise RuntimeError("no file input in the upload dialog")
-        inp.send_keys(pdf_abs)
-        time.sleep(1)
-        _click_xpath(d, "//*[@role='button' or self::button][normalize-space()='Upload' or normalize-space()='Insert']", 4)
-        time.sleep(3)
+        found = d.find_elements(By.CSS_SELECTOR, "input[type='file']")
+        if found:
+            found[0].send_keys(pdf_abs)
         d.switch_to.default_content()
+        end = time.time() + 12
+        while time.time() < end and not _attached(d, title, file_name):
+            time.sleep(1)
+
+        # method 2: Browse button -> Windows/GTK file dialog -> type the path (same as the Drive upload)
+        if not _attached(d, title, file_name):
+            import pyautogui
+            frame = next((f for f in d.find_elements(By.TAG_NAME, "iframe") if "picker" in (f.get_attribute("src") or "")), None)
+            if frame is not None:
+                d.switch_to.frame(frame)
+                _click_xpath(d, "//*[normalize-space()='Browse']", 5)
+                d.switch_to.default_content()
+                time.sleep(2.5)
+                pyautogui.write(pdf_abs, interval=0.01)
+                pyautogui.press("enter")
+                end = time.time() + 40
+                while time.time() < end and not _attached(d, title, file_name):
+                    time.sleep(1)
+
+        if not _attached(d, title, file_name):
+            raise RuntimeError("the file did not attach")
         return True
     except Exception as e:
         try:

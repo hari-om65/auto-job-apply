@@ -223,5 +223,10 @@ def _render(r: dict, path: str, k: float) -> int:
     return doc.page
 
 
+def cv_pdf_path(r: dict, *job_parts: str) -> str:
+    """telegram_apply/output/<job>/<Your_Name>_CV.pdf - what the recruiter sees is always your name, never the job."""
+    return f"{OUT_DIR}/{safe_name(*job_parts)}/{safe_name(r.get('name') or 'Resume')}_CV.pdf"
+
+
 def safe_name(*parts: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "_", "_".join(p or "" for p in parts)).strip("_")[:80]
