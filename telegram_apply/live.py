@@ -91,7 +91,7 @@ def run_tunnel(password: str) -> None:
             public = m.group(0)
             with open("telegram_apply/live_url.txt", "w") as f:
                 f.write(public)
-            print("\n" + "=" * 60 + f"\nLIVE DASHBOARD: {public}\nlogin: admin   password: {password}\n" + "=" * 60, flush=True)
+            print("\n" + "=" * 60 + f"\nLIVE DASHBOARD: {public}\nlogin: admin   password: see telegram_apply/dashboard_password.txt\n" + "=" * 60, flush=True)
             threading.Thread(target=email_link, args=(public,), daemon=True).start()
             threading.Thread(target=watchdog, args=(proc, public), daemon=True).start()
     proc.wait()
