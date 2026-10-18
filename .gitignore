@@ -43,3 +43,5 @@ telegram_apply/live_url.txt
 telegram_apply/runner_state.json
 telegram_apply/base_resume.json
 telegram_apply/tg_runner.session
+*.log
+telegram_apply/live.log
