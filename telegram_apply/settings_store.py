@@ -36,6 +36,8 @@ def load() -> dict:
     if os.path.exists(PATH):
         with open(PATH, encoding="utf-8-sig") as f:  # tolerate a BOM
             s.update(json.load(f))
+    if os.environ.get("DRY_RUN", "").strip():   # cloud runner: a repository variable decides, nothing is saved to disk
+        s["dry_run"] = os.environ["DRY_RUN"].strip().lower() in ("1", "true", "yes")
     return s
 
 

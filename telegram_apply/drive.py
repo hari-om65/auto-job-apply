@@ -95,6 +95,8 @@ def _rename_in_drive(d, current_stem: str, new_name: str) -> bool:
 def upload_to_drive(d, pdf_path: str) -> str | None:
     """Upload exactly this job's PDF to Drive in a new tab, share it as 'Anyone with the link' (viewer), and return
     the link. Returns None if any step fails - the caller must NOT substitute another resume silently."""
+    if os.environ.get("JA_HEADLESS"):   # cloud runner has no screen/file dialog: the caller reports "apply manually"
+        return None
     import pyautogui  # Drive's "File upload" opens a native Windows dialog; we type the path into it
 
     final_name = os.path.basename(os.path.abspath(pdf_path))             # e.g. Hari_Om_Singh_CV.pdf (same for every job)

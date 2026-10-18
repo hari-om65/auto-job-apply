@@ -66,9 +66,12 @@ def _driver():
     if cfg.chrome_user_data_dir:
         opts.add_argument(f"--user-data-dir={os.path.abspath(cfg.chrome_user_data_dir)}")
     opts.add_argument("--disable-blink-features=AutomationControlled")
-    if os.environ.get("JA_SERVER"):  # Linux server: no sandbox helper, small /dev/shm
+    if os.environ.get("JA_SERVER") or os.environ.get("JA_HEADLESS"):  # Linux server: no sandbox helper, small /dev/shm
         opts.add_argument("--no-sandbox")
         opts.add_argument("--disable-dev-shm-usage")
+    if os.environ.get("JA_HEADLESS"):  # cloud runner: no screen
+        opts.add_argument("--headless=new")
+        opts.add_argument("--window-size=1600,1000")
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
     return webdriver.Chrome(options=opts)
 
@@ -90,7 +93,7 @@ def _ensure_google_signin(d, wait_s: int = 240) -> bool:
     from selenium.webdriver.common.by import By
     if not _needs_signin(d):
         return True
-    if GOOGLE_LOGIN_FAILED:
+    if GOOGLE_LOGIN_FAILED or os.environ.get("JA_HEADLESS"):   # nobody can sign in on the cloud runner
         return False
     try:
         for el in d.find_elements(By.XPATH, "//*[self::a or self::button or @role='button']"

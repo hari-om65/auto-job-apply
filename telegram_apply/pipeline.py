@@ -97,7 +97,10 @@ def _process_job(job: dict, state: dict, min_ats: int) -> dict:
             appliers.send_email(to, mail["subject"], mail["body"], pdf)
         status.append(("emailed " if send else "dry-run: would email ") + to)
     for url in job["google_forms"][:1]:
-        status.append("form: " + appliers.fill_google_form(url, job, text_resume, send, pdf))
+        res = appliers.fill_google_form(url, job, text_resume, send, pdf)
+        status.append("form: " + res)
+        if res.startswith(("blocked", "stopped", "form did not load")):   # you still have to do this one yourself
+            manual_links.append(url)
     if job["linkedin_links"]:
         appliers.queue_linkedin(job, job["linkedin_links"])
         manual_links += job["linkedin_links"]
@@ -141,13 +144,13 @@ def compute_window(s: dict, now: datetime | None = None) -> tuple[datetime, date
     return start, end
 
 
-async def _run_async(s: dict, log, reprocess: bool = False) -> None:
+async def _run_async(s: dict, log, reprocess: bool = False, window=None) -> None:
     client = TelegramClient(cfg.tg_session, cfg.tg_api_id, cfg.tg_api_hash)
     await client.connect()
     try:
         if not await client.is_user_authorized():
             raise RuntimeError("Telegram is not logged in yet. Run once in a terminal: python -m telegram_apply.login")
-        start, end = compute_window(s)
+        start, end = window or compute_window(s)
         log(f"Checking posts from {start:%d %b %H:%M} to {end:%d %b %H:%M}")
         wanted = {str(c).lstrip("@").lower() for c in s["channels"]}
         chats = []
@@ -178,10 +181,10 @@ async def _run_async(s: dict, log, reprocess: bool = False) -> None:
         await client.disconnect()
 
 
-def run_once(log=print, reprocess: bool = False) -> None:
+def run_once(log=print, reprocess: bool = False, window=None) -> None:
     """Run the whole pipeline once with the current UI settings."""
     appliers.GOOGLE_LOGIN_FAILED = False
     s = settings_store.apply_to_config()
     log("Pipeline started" + (" (DRY RUN - nothing will be sent)" if s["dry_run"] else " (LIVE)"))
-    asyncio.run(_run_async(s, log, reprocess))
+    asyncio.run(_run_async(s, log, reprocess, window))
     log("Pipeline finished")

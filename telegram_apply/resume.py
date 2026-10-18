@@ -24,7 +24,20 @@ KFLOOR = 0.90        # absolute floor for the PDF so a long resume still fits on
 ACCENT = colors.HexColor("#1f3b63")
 
 
+BASE_JSON = "telegram_apply/base_resume.json"   # {"text": ..., "links": {...}}: used where the PDF itself is too big to ship
+
+
+def _base_json() -> dict | None:
+    if not os.path.exists(cfg.base_resume_pdf) and os.path.exists(BASE_JSON):
+        with open(BASE_JSON, encoding="utf-8") as f:
+            return json.load(f)
+    return None
+
+
 def read_base_resume() -> str:
+    packed = _base_json()
+    if packed:
+        return packed["text"]
     if not os.path.exists(cfg.base_resume_pdf):
         raise FileNotFoundError(f"Put your resume PDF at {cfg.base_resume_pdf}")
     return "\n".join(p.extract_text() or "" for p in PdfReader(cfg.base_resume_pdf).pages)
@@ -33,6 +46,9 @@ def read_base_resume() -> str:
 @functools.lru_cache(maxsize=1)
 def base_links() -> dict:
     """LinkedIn / GitHub / Portfolio URLs from the hyperlinks embedded in the base resume PDF."""
+    packed = _base_json()
+    if packed:
+        return packed["links"]
     found = {}
     for page in PdfReader(cfg.base_resume_pdf).pages:
         for a in page.get("/Annots") or []:
