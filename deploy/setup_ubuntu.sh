@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-time setup of the job dashboard on a fresh Ubuntu 22.04/24.04 server (run as root).
+# One-time setup of the job dashboard on a fresh Ubuntu 22.04/24.04 server (run as root). x86 or ARM (Oracle Cloud free).
 #   curl -fsSL https://raw.githubusercontent.com/hari-om65/auto-job-apply/main/deploy/setup_ubuntu.sh | sudo bash
 set -euo pipefail
 REPO="https://github.com/hari-om65/auto-job-apply.git"
@@ -9,12 +9,24 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y curl wget git ca-certificates gnupg python3 python3-venv python3-pip python3-tk python3-dev \
   scrot xvfb x11vnc novnc websockify fluxbox xdotool xterm fonts-liberation unzip ufw \
-  debian-keyring debian-archive-keyring apt-transport-https
+  debian-keyring debian-archive-keyring apt-transport-https software-properties-common
 
-# Google Chrome (the pipeline drives a real, signed-in Chrome)
-if ! command -v google-chrome-stable >/dev/null; then
-  wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-  apt-get install -y /tmp/chrome.deb
+# Small servers (1 GB, e.g. Oracle's free AMD micro): swap so Chrome does not run out of memory
+if [ "$(awk '/MemTotal/ {print $2}' /proc/meminfo)" -lt 3000000 ] && ! swapon --show | grep -q /swapfile; then
+  fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+  grep -q /swapfile /etc/fstab || echo "/swapfile none swap sw 0 0" >> /etc/fstab
+fi
+
+# The pipeline drives a real, signed-in browser: Google Chrome on x86, Chromium on ARM (Chrome has no ARM Linux build)
+if [ "$(dpkg --print-architecture)" = "amd64" ]; then
+  if ! command -v google-chrome-stable >/dev/null; then
+    wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+    apt-get install -y /tmp/chrome.deb
+  fi
+else
+  # Ubuntu's own chromium is a snap, which cannot use a profile outside the home folder: use the xtradeb .deb build
+  add-apt-repository -y ppa:xtradeb/apps
+  apt-get update && apt-get install -y chromium chromium-driver   # the app finds this chromedriver by itself
 fi
 
 # Caddy: automatic https for a free, stable hostname <ip>.sslip.io
@@ -77,7 +89,15 @@ $HOST {
 }
 CADDY
 
-ufw allow OpenSSH >/dev/null; ufw allow 80,443/tcp >/dev/null; ufw --force enable >/dev/null
+if iptables -S INPUT | grep -q -- "-j REJECT"; then
+  # Oracle Cloud images ship their own iptables rules ending in REJECT (ufw would fight them): allow web traffic first
+  for port in 80 443; do
+    iptables -C INPUT -p tcp --dport $port -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p tcp --dport $port -j ACCEPT
+  done
+  netfilter-persistent save
+else
+  ufw allow OpenSSH >/dev/null; ufw allow 80,443/tcp >/dev/null; ufw --force enable >/dev/null
+fi
 systemctl daemon-reload
 systemctl enable --now xvfb fluxbox dashboard caddy
 systemctl restart caddy

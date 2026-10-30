@@ -18,6 +18,7 @@ CANDIDATES = [
 ]
 
 
+SERVER_ARGS = ["--no-sandbox", "--disable-dev-shm-usage"] if os.environ.get("JA_SERVER") else []  # Linux server
 SITE = "linkedin" if "linkedin" in sys.argv[1:] else "google"
 
 
@@ -27,6 +28,8 @@ def signed_in(profile: str) -> bool:
     opts = webdriver.ChromeOptions()
     opts.add_argument(f"--user-data-dir={profile}")
     opts.add_argument("--headless=new")
+    for a in SERVER_ARGS:
+        opts.add_argument(a)
     d = webdriver.Chrome(options=opts)
     try:
         if SITE == "linkedin":
@@ -41,7 +44,7 @@ def signed_in(profile: str) -> bool:
 
 
 chrome = (next((p for p in CANDIDATES if os.path.exists(p)), None) or shutil.which("google-chrome-stable")
-          or shutil.which("google-chrome") or shutil.which("chrome"))
+          or shutil.which("google-chrome") or shutil.which("chrome") or shutil.which("chromium"))  # chromium: ARM servers
 if not chrome:
     raise SystemExit("Could not find chrome.exe")
 profile = os.path.abspath(cfg.chrome_user_data_dir)
@@ -50,7 +53,7 @@ os.makedirs(profile, exist_ok=True)
 print(f"Opening Chrome (profile: {profile})")
 print(f"-> Sign in to your {SITE.capitalize()} account in that window.")
 print("   If Google offers a passkey / Windows Hello prompt, click 'Try another way' and use your password.")
-subprocess.Popen([chrome, f"--user-data-dir={profile}", "--no-first-run", "https://www.linkedin.com/login" if SITE == "linkedin" else "https://accounts.google.com/"])
+subprocess.Popen([chrome, f"--user-data-dir={profile}", "--no-first-run", *SERVER_ARGS, "https://www.linkedin.com/login" if SITE == "linkedin" else "https://accounts.google.com/"])
 input("\nWhen you are fully signed in, CLOSE the Chrome window, then press Enter here... ")
 
 time.sleep(2)

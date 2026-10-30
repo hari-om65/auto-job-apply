@@ -8,4 +8,4 @@ pkill x11vnc 2>/dev/null; pkill websockify 2>/dev/null
 x11vnc -display :99 -localhost -nopw -forever -shared -bg -quiet
 websockify -D --web /usr/share/novnc 6080 localhost:5900
 echo "Desktop ready. In your browser open http://localhost:6080/vnc.html (after: ssh -L 6080:localhost:6080 jobs@SERVER)."
-echo "Now run, in the SSH session:  cd /opt/auto-job-apply && JA_SERVER=1 .venv/bin/python -m telegram_apply.google_login [linkedin]"
+echo "Now run, in the SSH session:  cd /opt/auto-job-apply && sudo -u jobs env DISPLAY=:99 JA_SERVER=1 .venv/bin/python -m telegram_apply.google_login [linkedin]"

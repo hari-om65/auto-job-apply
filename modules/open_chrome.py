@@ -56,7 +56,8 @@ def get_managed_driver_path() -> str | None:
     """
     try:
         from selenium.webdriver.common.selenium_manager import SeleniumManager
-        source = SeleniumManager().binary_paths(["--browser", "chrome"])["driver_path"]
+        # SE_CHROMEDRIVER: the system chromedriver (ARM Linux servers, where Selenium Manager has no Chrome to fetch)
+        source = os.environ.get("SE_CHROMEDRIVER") or SeleniumManager().binary_paths(["--browser", "chrome"])["driver_path"]
         # UC rewrites the driver in place, so never hand it the shared ~/.cache/selenium
         # copy that other tools use. Work on our own copy, in UC's own data dir.
         os.makedirs(uc.Patcher.data_path, exist_ok=True)
