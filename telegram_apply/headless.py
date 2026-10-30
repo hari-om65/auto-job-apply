@@ -88,7 +88,7 @@ def main() -> int:
     s = settings_store.load()          # honours the DRY_RUN environment variable without writing it to disk
     if os.environ.get("JOB_TEXT", "").strip() or os.environ.get("JOB_LINK", "").strip():
         return apply_job(s)
-    cfg.tg_session = os.environ.get("TG_SESSION_PATH", "telegram_apply/tg_runner")
+    cfg.tg_session = os.environ.setdefault("TG_SESSION_PATH", "telegram_apply/tg_runner")  # kept on every config reload
     os.makedirs("all excels", exist_ok=True)
 
     now = datetime.now()

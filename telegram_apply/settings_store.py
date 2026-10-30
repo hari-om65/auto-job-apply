@@ -76,6 +76,8 @@ def apply_to_config(s: dict | None = None) -> dict:
               "add_missing_keywords": bool(s["add_missing_keywords"]),
               "min_match_score": int(s["min_match_score"]),
               "max_applications_per_day": int(s["max_per_day"])}
+    if os.environ.get("TG_SESSION_PATH"):  # cloud runner: its own Telegram login, not the file's (the PC's)
+        values["tg_session"] = os.environ["TG_SESSION_PATH"]
     with _reload_lock:  # one update: a running job never sees the file's dry_run instead of the UI's
         vars(cfg).update(values)
     return s
