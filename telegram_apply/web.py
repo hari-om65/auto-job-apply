@@ -9,12 +9,12 @@ import os
 import secrets
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, Response, jsonify, request, send_from_directory
 from . import linkedin, pipeline, settings_store
 
 app = Flask(__name__)
-status = {"running": False, "log": []}
+status = {"running": False, "waiting": 0, "log": []}
 li_status = {"log": []}
 _lock = threading.Lock()
 PASSWORD_FILE = "telegram_apply/dashboard_password.txt"
@@ -47,14 +47,16 @@ def li_log(msg: str) -> None:
     print("[linkedin]", msg, flush=True)
 
 
-def run_pipeline(reprocess: bool = False) -> bool:
+def run_pipeline(reprocess: bool = False, window=None, on_success=None) -> bool:
     if not _lock.acquire(blocking=False):
         return False
 
     def work():
         status["running"] = True
         try:
-            pipeline.run_once(log, reprocess)
+            pipeline.run_once(log, reprocess, window)
+            if on_success:
+                on_success()
         except Exception as e:
             log(f"ERROR: {e}")
         finally:
@@ -63,6 +65,40 @@ def run_pipeline(reprocess: bool = False) -> bool:
 
     threading.Thread(target=work, daemon=True).start()
     return True
+
+
+def apply_now(text: str, link: str, force: bool) -> None:
+    """Apply to one job you added on the page. Waits for a run in progress (they share the browser profile)."""
+    def work():
+        status["waiting"] += 1
+        with _lock:
+            status["waiting"] -= 1
+            status["running"] = True
+            try:
+                for rec in pipeline.apply_one(text, link, force, log):
+                    log(f"{rec['job']} -> {rec['status']}")
+            except Exception as e:
+                log(f"ERROR: {e}")
+            finally:
+                status["running"] = False
+
+    if _lock.locked():
+        log("A run is in progress: your job starts as soon as it finishes")
+    threading.Thread(target=work, daemon=True).start()
+
+
+def watch_tick(s: dict, now: datetime) -> None:
+    """Watch mode: every few minutes, check the posts since the last check and apply to the new ones."""
+    every = max(int(s["watch_every_min"] or 15), 5)
+    last = datetime.fromisoformat(s["watch_last_check"]) if s["watch_last_check"] else None
+    tried = status.get("watch_tried")
+    if any(t and (now - t).total_seconds() < every * 60 for t in (last, tried)):
+        return
+    start = max(last or now - timedelta(minutes=every), now - timedelta(days=3))  # PC was off: catch up, but not forever
+    window = (start, now)
+    if run_pipeline(window=window, on_success=lambda: settings_store.save({"watch_last_check": now.isoformat(timespec="seconds")})):
+        status["watch_tried"] = now  # a failed check (no internet...) is retried next interval, from the same start
+        log(f"Watch: checking new posts since {start:%d %b %H:%M}")
 
 
 def run_linkedin() -> bool:
@@ -87,6 +123,8 @@ def scheduler() -> None:
                 if run_linkedin():
                     settings_store.save({"linkedin_last_run_date": str(now.date())})
                     li_log("Scheduled daily LinkedIn run triggered")
+            if s["watch_enabled"]:
+                watch_tick(s, now)
         except Exception as e:
             log(f"scheduler error: {e}")
         time.sleep(30)
@@ -100,7 +138,7 @@ def api_state():
             results = [json.loads(l) for l in f if l.strip()][-200:][::-1]
     s = settings_store.load()
     start, end = pipeline.compute_window(s)
-    return jsonify(settings=s, running=status["running"], log=status["log"][-80:], results=results,
+    return jsonify(settings=s, running=status["running"], waiting=status["waiting"], log=status["log"][-80:], results=results,
                    window=f"{start:%d %b %H:%M} -> {end:%d %b %H:%M}",
                    linkedin={"running": linkedin.is_running(), "log": li_status["log"][-80:], "results": linkedin.recent(80)})
 
@@ -117,6 +155,16 @@ def api_settings():
 @app.post("/api/run")
 def api_run():
     return jsonify(started=run_pipeline(bool((request.get_json(silent=True) or {}).get("reprocess"))))
+
+
+@app.post("/api/apply")
+def api_apply():
+    d = request.get_json(silent=True) or {}
+    text, link = (d.get("text") or "").strip(), (d.get("link") or "").strip()
+    if not (text or link):
+        return jsonify(started=False, error="Paste the job post or an apply link"), 400
+    apply_now(text, link, bool(d.get("force", True)))
+    return jsonify(started=True)
 
 
 @app.post("/api/linkedin/run")
@@ -163,10 +211,21 @@ th{color:var(--mu);font-weight:600}.ok{color:var(--ok)}.wa{color:var(--wa)}.er{c
 <h1>Job pipeline <span id=live class=pill>idle</span></h1>
 <div class=tabs><button id=tab_tg class=on>Telegram channels</button><button id=tab_li>LinkedIn (last 24 hours)</button></div>
 
+<div class=card style="margin-bottom:16px"><h2>Apply to a job now</h2>
+<div class=mu>Paste the job post / description, its apply link (company careers page, Google Form) or both. It is applied to right away with a resume tailored to it - no restart needed.</div>
+<label>Job post or description</label><textarea id=one_text rows=5 style="width:100%;padding:7px 9px;border:1px solid var(--bd);border-radius:6px;background:var(--bg);color:var(--tx);font:inherit"></textarea>
+<label>Apply link or recruiter email (optional if it is in the text)</label><input type=text id=one_link placeholder="https://careers.company.com/job/123">
+<div class=chk><input type=checkbox id=one_force checked><span>I picked this job: ignore the batch, fit score and daily limit filters</span></div>
+<div style="margin-top:12px" class=row><button id=one_go>Apply now</button><span class=mu id=one_msg style="align-self:center"></span></div>
+</div>
+
 <section id=sec_tg>
 <div class=grid>
 <div class=card><h2>Daily schedule</h2>
-<div class=chk><input type=checkbox id=enabled><span>Run automatically every day (keep this page's server running)</span></div>
+<div class=chk><input type=checkbox id=watch_enabled><span><b>Watch the channels</b>: apply to new posts automatically, all day</span></div>
+<div class=row><div><label>Check every (minutes, min 5)</label><input type=number id=watch_every_min></div>
+<div><label>Last checked</label><input type=text id=watch_seen disabled></div></div>
+<div class=chk><input type=checkbox id=enabled><span>Also run once every day for the time window below</span></div>
 <label>Run time (daily)</label><input type=time id=run_time>
 <div class=row><div><label>From date (blank = auto)</label><input type=date id=window_start_date></div>
 <div><label>To date (blank = today)</label><input type=date id=window_end_date></div></div>
@@ -211,9 +270,9 @@ th{color:var(--mu);font-weight:600}.ok{color:var(--ok)}.wa{color:var(--wa)}.er{c
 </main><script>
 const $=id=>document.getElementById(id);
 const F=['window_start_date','window_end_date','required_batch','run_time','window_start','window_end','channels','min_match_score','min_ats_score','max_per_day',
- 'linkedin_run_time','linkedin_roles','linkedin_location','linkedin_per_search'];
-const NUM=['min_match_score','min_ats_score','max_per_day','linkedin_per_search'];
-const CHK=['enabled','dry_run','add_missing_keywords','linkedin_enabled','linkedin_external'];
+ 'linkedin_run_time','linkedin_roles','linkedin_location','linkedin_per_search','watch_every_min'];
+const NUM=['min_match_score','min_ats_score','max_per_day','linkedin_per_search','watch_every_min'];
+const CHK=['enabled','dry_run','add_missing_keywords','linkedin_enabled','linkedin_external','watch_enabled'];
 let loaded=false;
 const esc=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 function tab(t){$('sec_tg').classList.toggle('hide',t!=='tg');$('sec_li').classList.toggle('hide',t!=='li');$('tab_tg').classList.toggle('on',t==='tg');$('tab_li').classList.toggle('on',t==='li')}
@@ -222,7 +281,9 @@ async function refresh(){
  const d=await (await fetch('/api/state')).json();
  if(!loaded){F.forEach(k=>$(k).value=Array.isArray(d.settings[k])?d.settings[k].join(', '):d.settings[k]);
   CHK.forEach(k=>$(k).checked=!!d.settings[k]);loaded=true}
- $('win').textContent=d.window;$('live').textContent=(d.running||d.linkedin.running)?'running...':'idle';
+ $('win').textContent=d.window;$('live').textContent=(d.running||d.linkedin.running)?'running...':d.settings.watch_enabled?'watching':'idle';
+ $('watch_seen').value=(d.settings.watch_last_check||'never').replace('T',' ');
+ $('one_msg').textContent=d.waiting?'waiting for the current run to finish...':d.running?'working - see the live log':'';
  $('run').disabled=d.running;$('log').textContent=d.log.join('\\n')||'-';
  $('li_run').disabled=d.linkedin.running;$('li_log').textContent=d.linkedin.log.join('\\n')||'-';
  $('rows').innerHTML=d.results.map(r=>{
@@ -241,6 +302,10 @@ async function save(btn){const b={};CHK.forEach(k=>b[k]=$(k).checked);
 $('save').onclick=()=>save($('save'));$('save2').onclick=()=>save($('save2'));
 $('run').onclick=async()=>{await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reprocess:$('reprocess').checked})});refresh()};
 $('li_run').onclick=async()=>{await save($('save2'));await fetch('/api/linkedin/run',{method:'POST'});refresh()};
+$('one_go').onclick=async()=>{const b={text:$('one_text').value,link:$('one_link').value,force:$('one_force').checked};
+ if(!b.text.trim()&&!b.link.trim()){$('one_msg').textContent='Paste the job post or a link first';return}
+ const r=await fetch('/api/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+ if(r.ok){$('one_text').value='';$('one_link').value='';tab('tg')}refresh()};
 $('li_stop').onclick=async()=>{await fetch('/api/linkedin/stop',{method:'POST'});refresh()};
 refresh();setInterval(refresh,4000);
 </script></body></html>"""

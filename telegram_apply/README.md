@@ -16,6 +16,12 @@ Watches Telegram job channels, picks the jobs that fit you, writes a tailored on
 - Control panel (daily schedule, time window, dry-run toggle, results): `python -m telegram_apply.web` -> http://localhost:5055
 - Live mode (react to new posts instantly): `python -m telegram_apply.main`
 
+- **Apply to a job now** (top of the dashboard): paste a job post, an apply link or both and it is applied to right away.
+- **Watch the channels**: checks the Telegram channels every few minutes and applies to new posts all day.
+- Edits to `config/telegram_apply.py` are picked up at the next run; no restart needed.
+- Always on: `powershell -ExecutionPolicy Bypass -File telegram_apply\install_autostart.ps1` starts the dashboard at login
+  and restarts it within 5 minutes if it ever stops.
+
 Dry run is ON by default: everything is prepared but nothing is sent or submitted. Check the tailored PDFs in
 `telegram_apply/output/` and the screenshots in `telegram_apply/output/proof/` before turning it off.
 

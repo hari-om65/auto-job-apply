@@ -13,6 +13,7 @@ import ctypes
 import os
 import re
 import smtplib
+import socket
 import subprocess
 import sys
 import threading
@@ -85,7 +86,7 @@ def run_tunnel(password: str) -> None:
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
     announced = False
     for line in proc.stdout:
-        m = re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", line)
+        m = re.search(r"https://(?!api\.)[a-z0-9-]+\.trycloudflare\.com", line)  # api.* is in cloudflared's error lines
         if m and not announced:
             announced = True
             public = m.group(0)
@@ -97,7 +98,16 @@ def run_tunnel(password: str) -> None:
     proc.wait()
 
 
+def already_running() -> bool:
+    """The autostart task re-launches this every few minutes; only the first copy keeps running."""
+    with socket.socket() as s:
+        return s.connect_ex(("127.0.0.1", PORT)) == 0
+
+
 def main() -> None:
+    if already_running():
+        print(f"The dashboard is already running on port {PORT}; nothing to do.", flush=True)
+        return
     keep_awake()
     password = web.dashboard_password()
     threading.Thread(target=web.scheduler, daemon=True).start()

@@ -24,3 +24,4 @@ telethon
 openai
 pypdf
 reportlab
+requests

@@ -1,6 +1,7 @@
 """Settings edited from the web UI. Saved to ui_settings.json and applied on top of config/telegram_apply.py."""
 import json
 import os
+import threading
 from config import telegram_apply as cfg
 
 PATH = "telegram_apply/ui_settings.json"
@@ -28,7 +29,12 @@ DEFAULTS = {
     "linkedin_per_search": 15,                       # max jobs per role per run
     "linkedin_last_run_date": "",
     "last_run_date": "",
+    # watch mode: check the channels every few minutes and apply to new posts (no restart, no daily wait)
+    "watch_enabled": False,
+    "watch_every_min": 15,
+    "watch_last_check": "",                          # ISO time up to which posts have been checked
 }
+_reload_lock = threading.Lock()
 
 
 def load() -> dict:
@@ -48,13 +54,28 @@ def save(s: dict) -> dict:
     return s
 
 
+def _read_config_file() -> dict:
+    """Fresh values from config/telegram_apply.py, so edits to it apply on the next run without a restart."""
+    ns = {"__name__": cfg.__name__, "__file__": cfg.__file__}
+    try:
+        with open(cfg.__file__, encoding="utf-8-sig") as f:
+            exec(compile(f.read(), cfg.__file__, "exec"), ns)
+    except Exception as e:  # a typo in the file must not stop the dashboard: keep the values already loaded
+        print(f"config/telegram_apply.py not reloaded ({type(e).__name__}: {e}); using the previous values", flush=True)
+        return {}
+    return {k: v for k, v in ns.items() if not k.startswith("__")}
+
+
 def apply_to_config(s: dict | None = None) -> dict:
-    """Push the UI settings into the config module the pipeline reads."""
+    """Push the config file and the UI settings into the config module the pipeline reads."""
     s = s or load()
-    cfg.dry_run = bool(s["dry_run"])
-    cfg.tg_channels = list(s["channels"])
-    cfg.required_batch = str(s["required_batch"]).strip()
-    cfg.add_missing_keywords = bool(s["add_missing_keywords"])
-    cfg.min_match_score = int(s["min_match_score"])
-    cfg.max_applications_per_day = int(s["max_per_day"])
+    values = {**_read_config_file(),
+              "dry_run": bool(s["dry_run"]),
+              "tg_channels": list(s["channels"]),
+              "required_batch": str(s["required_batch"]).strip(),
+              "add_missing_keywords": bool(s["add_missing_keywords"]),
+              "min_match_score": int(s["min_match_score"]),
+              "max_applications_per_day": int(s["max_per_day"])}
+    with _reload_lock:  # one update: a running job never sees the file's dry_run instead of the UI's
+        vars(cfg).update(values)
     return s

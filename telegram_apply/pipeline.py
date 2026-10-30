@@ -1,8 +1,11 @@
 """The daily pipeline: read channel posts in a time window -> pick matching jobs -> tailor resume -> apply."""
 import asyncio
 import csv
+import hashlib
+import html
 import json
 import os
+import re
 from datetime import date, datetime, timedelta
 from telethon import TelegramClient
 from config import telegram_apply as cfg
@@ -35,7 +38,7 @@ def record(rec: dict) -> None:
                                 rec.get("pdf"), rec.get("status"), ", ".join(rec.get("missing") or [])])
 
 
-def process_post(text: str, key: str, state: dict, min_ats: int = 0) -> list[dict]:
+def process_post(text: str, key: str, state: dict, min_ats: int = 0, force: bool = False) -> list[dict]:
     """Handle one channel post (it may contain several jobs). Returns one result record per job found."""
     if key in state["seen"]:
         return []
@@ -47,7 +50,7 @@ def process_post(text: str, key: str, state: dict, min_ats: int = 0) -> list[dic
     try:
         for job in jobs.extract_jobs(text):
             try:
-                recs.append(_process_job(job, state, min_ats))
+                recs.append(_process_job(job, state, min_ats, force))
             except Exception as e:  # one bad job must not stop the others
                 rec = {"job": f"{job.get('company')} - {job.get('role')}", "status": f"error: {e!r}"[:220]}
                 record(rec)
@@ -61,7 +64,8 @@ def process_post(text: str, key: str, state: dict, min_ats: int = 0) -> list[dic
     return recs
 
 
-def _process_job(job: dict, state: dict, min_ats: int) -> dict:
+def _process_job(job: dict, state: dict, min_ats: int, force: bool = False) -> dict:
+    """force = you picked this job yourself: the batch, fit and daily-limit filters do not apply."""
     label = f"{job.get('company')} - {job.get('role')}"
     batch = job.get("batch") or "not stated"
 
@@ -70,7 +74,7 @@ def _process_job(job: dict, state: dict, min_ats: int) -> dict:
         record(rec)
         return rec
 
-    if not jobs.batch_ok(job, cfg.required_batch):
+    if not force and not jobs.batch_ok(job, cfg.required_batch):
         return skip(f"batch is {batch}, not {cfg.required_batch}")
     routes = job["emails"] or job["google_forms"] or job["linkedin_links"] or job["other_links"]
     if not routes:
@@ -78,9 +82,9 @@ def _process_job(job: dict, state: dict, min_ats: int) -> dict:
     base = resume.read_base_resume()
     fit = jobs.score_match(job, base)
     score = fit.get("score", 0)
-    if not fit.get("eligible", True) or score < cfg.min_match_score:
+    if not force and (not fit.get("eligible", True) or score < cfg.min_match_score):
         return skip("not a good fit", fit=score, note="; ".join(fit.get("reasons", [])[:2]))
-    if state["count"] >= cfg.max_applications_per_day:
+    if not force and state["count"] >= cfg.max_applications_per_day:
         return skip("daily limit reached", fit=score)
 
     tailored, ats, missing = resume.build_tailored_resume(job, base)
@@ -179,6 +183,37 @@ async def _run_async(s: dict, log, reprocess: bool = False, window=None) -> None
                     log(f"{rec['job']} -> {rec['status']}")
     finally:
         await client.disconnect()
+
+
+def _page_text(url: str) -> str:
+    """Best-effort readable text of a job page (enough for the AI to find company, role and skills)."""
+    import requests  # uses certifi: Windows Python's own certificate store often cannot verify https sites
+    try:
+        page = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20).text[:800_000]
+    except Exception:
+        return ""
+    page = re.sub(r"(?is)<(script|style|noscript)[^>]*>.*?</\1>", " ", page)
+    return re.sub(r"\s+", " ", html.unescape(re.sub(r"(?s)<[^>]+>", " ", page))).strip()[:10000]
+
+
+def apply_one(text: str, link: str = "", force: bool = True, log=print) -> list[dict]:
+    """Apply to one job you picked: a pasted job post / description and/or its apply link, email or form."""
+    s = settings_store.apply_to_config()
+    text, link = (text or "").strip(), (link or "").strip()
+    if link and not text:
+        log(f"Reading the job page {link}")
+        text = _page_text(link)
+    post = text + (f"\n\nApply here: {link}" if link else "")
+    if not post.strip():
+        raise ValueError("Paste the job post or an apply link")
+    log("Applying to the job you added" + (" (DRY RUN - nothing will be sent)" if s["dry_run"] else " (LIVE)"))
+    key = "manual:" + hashlib.sha1(f"{post}{datetime.now()}".encode()).hexdigest()[:12]
+    recs = process_post(post, key, _load_state(), int(s["min_ats_score"]), force)
+    if not recs:
+        rec = {"job": (link or text[:60]).replace("\n", " "), "status": "skipped: no job found in what you pasted"}
+        record(rec)
+        recs = [rec]
+    return recs
 
 
 def run_once(log=print, reprocess: bool = False, window=None) -> None:
