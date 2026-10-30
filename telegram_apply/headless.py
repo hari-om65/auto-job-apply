@@ -9,6 +9,7 @@ Environment (all optional):
   TG_SESSION_PATH  Telegram session file (default telegram_apply/tg_runner)
   DRY_RUN          "1"/"true" = prepare only, "0"/"false" = really send (default: the dry_run in ui_settings.json)
   SINCE_HOURS      how far back the very first run looks (default 26)
+  JOB_TEXT / JOB_LINK  apply to this one job instead of reading the channels (FORCE=false keeps the batch/fit filters)
 Only counts are printed to the log; the details go to your email so a public log never shows job names.
 """
 import json
@@ -32,7 +33,8 @@ def _summary(recs: list[dict], dry: bool, window) -> tuple[str, str]:
     manual = [r for r in recs if r.get("manual_links")]
     errors = [r for r in recs if (r.get("status") or "").startswith("error")]
     skipped = [r for r in recs if (r.get("status") or "").startswith("skipped")]
-    lines = [f"Posts window: {window[0]:%d %b %H:%M} -> {window[1]:%d %b %H:%M}   |   mode: {'DRY RUN (nothing was sent)' if dry else 'LIVE'}", ""]
+    what = f"Posts window: {window[0]:%d %b %H:%M} -> {window[1]:%d %b %H:%M}" if window else "The job you added"
+    lines = [f"{what}   |   mode: {'DRY RUN (nothing was sent)' if dry else 'LIVE'}", ""]
 
     def block(title, rows, extra=lambda r: ""):
         if rows:
@@ -60,9 +62,32 @@ def _email(subject: str, body: str) -> None:
         s.send_message(msg)
 
 
+def apply_job(s: dict) -> int:
+    """Apply to the one job given in JOB_TEXT / JOB_LINK (the "Run workflow" form on GitHub), then email the result."""
+    force = os.environ.get("FORCE", "true").strip().lower() in ("1", "true", "yes")
+    try:
+        recs = pipeline.apply_one(os.environ.get("JOB_TEXT", ""), os.environ.get("JOB_LINK", ""), force, log=lambda msg: None)
+    except Exception as e:
+        print(f"APPLY FAILED: {type(e).__name__}: {str(e)[:200]}")
+        try:
+            _email("[Job runner] Could not apply to the job you added", f"{type(e).__name__}: {e}")
+        except Exception:
+            pass
+        return 1
+    subject, body = _summary(recs, bool(s["dry_run"]), None)
+    try:
+        _email(subject, body)
+    except Exception as e:
+        print("could not email the result:", type(e).__name__)
+    print(f"done: {len(recs)} job(s) | {subject}")
+    return 0
+
+
 def main() -> int:
     os.environ.setdefault("JA_HEADLESS", "1")
     s = settings_store.load()          # honours the DRY_RUN environment variable without writing it to disk
+    if os.environ.get("JOB_TEXT", "").strip() or os.environ.get("JOB_LINK", "").strip():
+        return apply_job(s)
     cfg.tg_session = os.environ.get("TG_SESSION_PATH", "telegram_apply/tg_runner")
     os.makedirs("all excels", exist_ok=True)
 

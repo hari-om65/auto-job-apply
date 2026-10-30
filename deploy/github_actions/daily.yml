@@ -1,12 +1,25 @@
 # Copy this file to .github/workflows/daily.yml in your PRIVATE runner repo (see deploy/github_actions/README.md).
-name: Daily job run
+name: Job runner
 
 on:
-  schedule:                       # UTC; 01:30 08:30 11:30 14:30 ... = about 07:00 10:30 13:30 16:30 20:00 India time
-    - cron: "30 1,5,8,11,14 * * *"
-  workflow_dispatch:
+  schedule:                       # UTC; every hour from 00:30 to 17:30 = 06:00 to 23:00 India time
+    - cron: "30 0-17 * * *"
+  workflow_dispatch:              # Actions tab -> Job runner -> Run workflow: fill these to apply to one job now
+    inputs:
+      job:
+        description: "Apply to one job: paste the job post / description (leave empty to just check the channels)"
+        required: false
+        default: ""
+      link:
+        description: "Apply link or recruiter email (optional if it is in the post)"
+        required: false
+        default: ""
+      ignore_filters:
+        description: "I picked this job: ignore the batch, fit score and daily limit filters"
+        type: boolean
+        default: true
 
-concurrency:
+concurrency:                      # one run at a time, so the saved state is never overwritten
   group: job-runner
   cancel-in-progress: false
 
@@ -48,6 +61,10 @@ jobs:
             && cp /tmp/state/*.json /tmp/state/*.jsonl telegram_apply/ 2>/dev/null || echo "no saved state yet (first run)"
 
       - name: Run the pipeline
+        env:                      # passed as variables, never pasted into the script, so job text cannot run as code
+          JOB_TEXT: ${{ inputs.job }}
+          JOB_LINK: ${{ inputs.link }}
+          FORCE: ${{ inputs.ignore_filters }}
         run: python -W ignore -m telegram_apply.headless
 
       - name: Save state

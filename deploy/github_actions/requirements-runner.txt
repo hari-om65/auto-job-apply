@@ -3,3 +3,4 @@ openai
 pypdf
 reportlab
 selenium
+requests
